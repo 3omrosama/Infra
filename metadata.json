@@ -1,0 +1,6 @@
+{
+  "name": "NOC Infrastructure Manager",
+  "description": "Production-ready full-stack IT Infrastructure Management Dashboard with ESXi, CasaOS, and Docker monitoring, real-time telemetry, alerts, and RBAC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

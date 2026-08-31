@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: noc_dashboard_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://noc_user:noc_secure_pass@postgres:5432/noc_infrastructure?schema=public
+      - JWT_SECRET=c8f8b8e0d5a34e7f91a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4
+      - CREDENTIAL_ENCRYPTION_KEY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      - MONITOR_POLL_INTERVAL_SECONDS=30
+      - METRIC_RETENTION_DAYS=30
+      - DEMO_MODE_DEFAULT=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: noc_dashboard_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=noc_user
+      - POSTGRES_PASSWORD=noc_secure_pass
+      - POSTGRES_DB=noc_infrastructure
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noc_user -d noc_infrastructure"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+  app_data:
+    driver: local

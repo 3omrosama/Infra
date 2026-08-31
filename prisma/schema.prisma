@@ -1,0 +1,408 @@
+// Prisma Schema for NOC Infrastructure Management Platform
+// PostgreSQL Database Schema
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum ConnectionType {
+  ESXI
+  CASAOS
+  DOCKER
+  PROXMOX
+  TRUENAS
+  LINUX_SERVER
+  WINDOWS_SERVER
+}
+
+enum ConnectionStatus {
+  ONLINE
+  OFFLINE
+  DEGRADED
+  CONNECTING
+  DISABLED
+}
+
+enum ResourceType {
+  ESXI
+  VM
+  CASAOS
+  DOCKER
+  SERVER
+  STORAGE
+  NETWORK
+}
+
+enum PowerState {
+  RUNNING
+  STOPPED
+  SUSPENDED
+  UNKNOWN
+}
+
+enum AlertSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+enum AlertStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  CREATE_CONNECTION
+  UPDATE_CONNECTION
+  DELETE_CONNECTION
+  TEST_CONNECTION
+  VM_POWER_ON
+  VM_POWER_OFF
+  VM_RESTART
+  VM_SUSPEND
+  APP_START
+  APP_STOP
+  APP_RESTART
+  CONTAINER_START
+  CONTAINER_STOP
+  CONTAINER_RESTART
+  UPDATE_ALERT_RULE
+  ACK_ALERT
+  RESOLVE_ALERT
+  USER_CREATE
+  USER_UPDATE
+  USER_DELETE
+  SYSTEM_CONFIG_UPDATE
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        UserRole @unique
+  description String
+  permissions Json     @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+}
+
+model User {
+  id           String     @id @default(uuid())
+  username     String     @unique
+  email        String     @unique
+  passwordHash String
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id])
+  isActive     Boolean    @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  sessions     Session[]
+  auditLogs    AuditLog[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([userId])
+}
+
+model InfrastructureProvider {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  type        ConnectionType
+  description String
+  version     String
+  isEnabled   Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  connections InfrastructureConnection[]
+}
+
+model InfrastructureConnection {
+  id              String                 @id @default(uuid())
+  name            String
+  providerId      String
+  provider        InfrastructureProvider @relation(fields: [providerId], references: [id])
+  type            ConnectionType
+  host            String
+  port            Int
+  useHttps        Boolean                @default(true)
+  skipSslVerify   Boolean                @default(false)
+  username        String?
+  encryptedSecret String?                // Encrypted at rest (password/token/key)
+  secretIv        String?
+  secretTag       String?
+  status          ConnectionStatus       @default(OFFLINE)
+  lastSeen        DateTime?
+  lastCheckedAt   DateTime?
+  errorDetails    String?
+  pollIntervalSec Int                    @default(30)
+  isEnabled       Boolean                @default(true)
+  isDemo          Boolean                @default(false)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  hosts           Host[]
+  virtualMachines VirtualMachine[]
+  containers      Container[]
+  storageVolumes  Storage[]
+  networks        Network[]
+  metrics         Metric[]
+  alerts          Alert[]
+  events          Event[]
+  auditLogs       AuditLog[]
+
+  @@index([type])
+  @@index([status])
+}
+
+model Host {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  hostname       String
+  ipAddress      String
+  version        String
+  build          String?
+  cpuModel       String?
+  cpuCores       Int                      @default(1)
+  cpuMhzTotal    Int?
+  cpuUsagePct    Float                    @default(0)
+  memoryBytesTotal BigInt                 @default(0)
+  memoryUsagePct Float                    @default(0)
+  uptimeSeconds  BigInt                   @default(0)
+  powerState     PowerState               @default(RUNNING)
+  rawDetails     Json?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  virtualMachines VirtualMachine[]
+  storage         Storage[]
+  networks        Network[]
+
+  @@index([connectionId])
+}
+
+model VirtualMachine {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  hostId         String?
+  host           Host?                    @relation(fields: [hostId], references: [id], onDelete: SetNull)
+  externalVmId   String                   // e.g. vm-104 on ESXi
+  name           String
+  powerState     PowerState               @default(RUNNING)
+  cpuCount       Int                      @default(1)
+  cpuUsagePct    Float                    @default(0)
+  memoryBytes    BigInt                   @default(0)
+  memoryUsagePct Float                    @default(0)
+  storageBytes   BigInt                   @default(0)
+  storageUsagePct Float                   @default(0)
+  ipAddress      String?
+  guestOs        String?
+  uptimeSeconds  BigInt                   @default(0)
+  datastoreName  String?
+  networkName    String?
+  rawDetails     Json?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([connectionId])
+  @@index([powerState])
+}
+
+model Container {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  externalId     String                   // Docker container ID or CasaOS app ID
+  name           String
+  image          String
+  status         String
+  powerState     PowerState               @default(RUNNING)
+  cpuUsagePct    Float                    @default(0)
+  memoryBytes    BigInt                   @default(0)
+  memoryUsagePct Float                    @default(0)
+  networkTxBytes BigInt                   @default(0)
+  networkRxBytes BigInt                   @default(0)
+  ports          Json?                    // Array of port mappings
+  volumes        Json?                    // Array of volume mounts
+  restartCount   Int                      @default(0)
+  isCasaOsApp    Boolean                  @default(false)
+  appCategory    String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([connectionId])
+  @@index([powerState])
+}
+
+model Storage {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  hostId         String?
+  host           Host?                    @relation(fields: [hostId], references: [id], onDelete: SetNull)
+  name           String
+  type           String                   // VMFS, NFS, EXT4, ZFS, BTRFS
+  capacityBytes  BigInt                   @default(0)
+  freeBytes      BigInt                   @default(0)
+  usagePct       Float                    @default(0)
+  mountPoint     String?
+  driveModel     String?
+  healthStatus   String                   @default("OK")
+  temperatureC   Float?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([connectionId])
+}
+
+model Network {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  hostId         String?
+  host           Host?                    @relation(fields: [hostId], references: [id], onDelete: SetNull)
+  name           String
+  type           String                   // vSwitch, PortGroup, Bridge, PhysicalNIC
+  vlanId         Int?
+  ipAddress      String?
+  macAddress     String?
+  speedMbps      Int?
+  rxBytesPerSec  Float                    @default(0)
+  txBytesPerSec  Float                    @default(0)
+  status         String                   @default("ACTIVE")
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([connectionId])
+}
+
+model Metric {
+  id             String                   @id @default(uuid())
+  connectionId   String
+  connection     InfrastructureConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  resourceType   ResourceType
+  resourceId     String                   // hostId, vmId, containerId
+  resourceName   String
+  cpuPct         Float
+  memoryPct      Float
+  storagePct     Float?
+  networkRxKbps  Float                    @default(0)
+  networkTxKbps  Float                    @default(0)
+  timestamp      DateTime                 @default(now())
+
+  @@index([connectionId, timestamp])
+  @@index([resourceId, timestamp])
+  @@index([timestamp])
+}
+
+model AlertRule {
+  id          String        @id @default(uuid())
+  name        String
+  metric      String        // cpu, memory, storage, network, status
+  condition   String        // gt, lt, eq, offline
+  threshold   Float
+  durationSec Int           @default(60)
+  severity    AlertSeverity @default(WARNING)
+  isEnabled   Boolean       @default(true)
+  targetType  ResourceType?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+}
+
+model Alert {
+  id             String                   @id @default(uuid())
+  connectionId   String?
+  connection     InfrastructureConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  title          String
+  message        String
+  severity       AlertSeverity
+  status         AlertStatus              @default(ACTIVE)
+  source         String
+  resourceType   ResourceType?
+  resourceId     String?
+  valueObserved  Float?
+  threshold      Float?
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  resolvedAt     DateTime?
+  resolvedBy     String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([status])
+  @@index([severity])
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String        @id @default(uuid())
+  title     String
+  message   String
+  severity  AlertSeverity @default(INFO)
+  isRead    Boolean       @default(false)
+  channel   String        @default("IN_APP") // IN_APP, EMAIL, WEBHOOK
+  payload   Json?
+  createdAt DateTime      @default(now())
+
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model Event {
+  id           String                   @id @default(uuid())
+  connectionId String?
+  connection   InfrastructureConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  eventType    String                   // HOST_DISCONNECTED, VM_POWER_STATE, CONFIG_CHANGED
+  severity     AlertSeverity            @default(INFO)
+  source       String
+  message      String
+  metadata     Json?
+  timestamp    DateTime                 @default(now())
+
+  @@index([timestamp])
+  @@index([connectionId])
+}
+
+model AuditLog {
+  id           String                    @id @default(uuid())
+  userId       String?
+  user         User?                     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  connectionId String?
+  connection   InfrastructureConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  action       AuditAction
+  resourceType String
+  resourceId   String?
+  details      String
+  ipAddress    String?
+  status       String                    @default("SUCCESS") // SUCCESS or FAILURE
+  createdAt    DateTime                  @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([action])
+}

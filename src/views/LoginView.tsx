@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Shield, Lock, User, Key, AlertCircle, Sparkles, Server } from 'lucide-react';
+import { DEMO_ACCOUNTS, DEFAULT_DEMO_CREDENTIALS } from '../constants/demoAccounts';
 
 export const LoginView: React.FC = () => {
   const { login } = useAuth();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('Admin@123456');
+  const [username, setUsername] = useState(DEFAULT_DEMO_CREDENTIALS.username);
+  const [password, setPassword] = useState(DEFAULT_DEMO_CREDENTIALS.password);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -106,35 +107,18 @@ export const LoginView: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              id="btn-quick-fill-admin"
-              onClick={() => handleQuickFill('admin', 'Admin@123456')}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-left transition-colors"
-            >
-              <p className="text-xs font-bold text-cyan-400">Admin</p>
-              <p className="text-[10px] text-slate-500 font-mono">Full Access</p>
-            </button>
-
-            <button
-              type="button"
-              id="btn-quick-fill-operator"
-              onClick={() => handleQuickFill('operator', 'Operator@123')}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-left transition-colors"
-            >
-              <p className="text-xs font-bold text-emerald-400">Operator</p>
-              <p className="text-[10px] text-slate-500 font-mono">Power / Ops</p>
-            </button>
-
-            <button
-              type="button"
-              id="btn-quick-fill-viewer"
-              onClick={() => handleQuickFill('viewer', 'Viewer@123')}
-              className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-left transition-colors"
-            >
-              <p className="text-xs font-bold text-purple-400">Viewer</p>
-              <p className="text-[10px] text-slate-500 font-mono">Read Only</p>
-            </button>
+            {DEMO_ACCOUNTS.map(account => (
+              <button
+                key={account.id}
+                type="button"
+                id={`btn-quick-fill-${account.role.toLowerCase()}`}
+                onClick={() => handleQuickFill(account.username, account.password)}
+                className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/60 text-left transition-colors"
+              >
+                <p className={`text-xs font-bold ${account.badgeColorClass}`}>{account.label}</p>
+                <p className="text-[10px] text-slate-500 font-mono">{account.description}</p>
+              </button>
+            ))}
           </div>
         </div>
 

@@ -18,6 +18,7 @@ import {
   DatastoreInfo,
   NetworkInfo
 } from '../../src/types/index.js';
+import { DEMO_ACCOUNTS } from '../../src/constants/demoAccounts.js';
 import { hashPassword, encryptSecret } from '../crypto.js';
 import fs from 'fs';
 import path from 'path';
@@ -82,42 +83,20 @@ class DataStore {
     if (this.initialized) return;
     this.initialized = true;
 
-    // Seed default roles and admin user
-    const adminPasswordHash = await hashPassword('AdminNocPass2026!');
-    const adminUser: StoredUser = {
-      id: 'usr-admin-001',
-      username: 'admin',
-      email: 'admin@infrastructure.internal',
-      passwordHash: adminPasswordHash,
-      role: 'ADMIN',
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-    this.users.set(adminUser.id, adminUser);
-
-    const operatorPasswordHash = await hashPassword('OperatorPass2026!');
-    const opUser: StoredUser = {
-      id: 'usr-op-002',
-      username: 'operator',
-      email: 'operator@infrastructure.internal',
-      passwordHash: operatorPasswordHash,
-      role: 'OPERATOR',
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-    this.users.set(opUser.id, opUser);
-
-    const viewerPasswordHash = await hashPassword('ViewerPass2026!');
-    const viewerUser: StoredUser = {
-      id: 'usr-view-003',
-      username: 'viewer',
-      email: 'viewer@infrastructure.internal',
-      passwordHash: viewerPasswordHash,
-      role: 'VIEWER',
-      isActive: true,
-      createdAt: new Date().toISOString()
-    };
-    this.users.set(viewerUser.id, viewerUser);
+    // Seed default roles and demo users from single source of truth
+    for (const account of DEMO_ACCOUNTS) {
+      const passwordHash = await hashPassword(account.password);
+      const user: StoredUser = {
+        id: account.id,
+        username: account.username,
+        email: account.email,
+        passwordHash,
+        role: account.role,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      };
+      this.users.set(user.id, user);
+    }
 
     // Seed default Alert Rules
     const defaultRules: AlertRule[] = [

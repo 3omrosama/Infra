@@ -34,6 +34,9 @@ class ApiClient {
 
   private async handleResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
+      if (res.status === 401 && !res.url.endsWith('/api/auth/login')) {
+        localStorage.removeItem('noc_auth_token');
+      }
       const errorData = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(errorData.error || `HTTP error ${res.status}`);
     }

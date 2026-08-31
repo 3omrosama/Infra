@@ -95,11 +95,11 @@ class MonitoringPoller {
               conn.status = 'DEGRADED';
             }
           }
-          store.connections.set(conn.id, conn);
+          store.saveConnection(conn);
         } catch (err: any) {
           conn.status = 'DEGRADED';
           conn.errorDetails = err.message;
-          store.connections.set(conn.id, conn);
+          store.saveConnection(conn);
         }
       }
 

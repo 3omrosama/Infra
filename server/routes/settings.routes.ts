@@ -12,7 +12,7 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
 });
 
 // Update settings (Admin only)
-router.put('/', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.put('/', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { 
     pollIntervalSec, 
     metricRetentionDays, 
@@ -37,6 +37,9 @@ router.put('/', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequ
   if (smtpFrom !== undefined) store.settings.smtpFrom = smtpFrom;
   if (autoResolveMinutes) store.settings.autoResolveMinutes = parseInt(autoResolveMinutes, 10);
 
+  // Persist to PostgreSQL
+  await store.saveSettings(store.settings);
+
   // Restart monitoring poller with new interval
   monitoringPoller.start();
 
@@ -54,8 +57,8 @@ router.put('/', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequ
 });
 
 // Re-seed demo infrastructure
-router.post('/reset-demo', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
-  store.seedDemoData();
+router.post('/reset-demo', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+  await store.seedDemoData();
 
   logAuditAction({
     userId: req.user?.id,

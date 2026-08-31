@@ -13,7 +13,7 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
 });
 
 // Mark single as read
-router.post('/:id/read', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+router.post('/:id/read', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const notif = store.notifications.get(id);
   if (!notif) {
@@ -22,20 +22,21 @@ router.post('/:id/read', authenticateToken, (req: AuthenticatedRequest, res: Res
   }
 
   notif.isRead = true;
-  store.notifications.set(id, notif);
+  await store.saveNotification(notif);
   res.json(notif);
 });
 
 // Mark all as read
-router.post('/read-all', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  store.notifications.forEach(n => {
+router.post('/read-all', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  for (const n of store.notifications.values()) {
     n.isRead = true;
-  });
+    await store.saveNotification(n);
+  }
   res.json({ success: true, message: 'All notifications marked as read' });
 });
 
 // Test Notification trigger
-router.post('/test', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+router.post('/test', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const testNotif: NotificationItem = {
     id: `notif-test-${Date.now()}`,
     title: 'Test Notification Dispatched',
@@ -46,7 +47,7 @@ router.post('/test', authenticateToken, (req: AuthenticatedRequest, res: Respons
     createdAt: new Date().toISOString()
   };
 
-  store.notifications.set(testNotif.id, testNotif);
+  await store.saveNotification(testNotif);
   res.json(testNotif);
 });
 

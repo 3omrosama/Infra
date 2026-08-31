@@ -6,6 +6,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
+RUN npx prisma generate
 RUN npm run build
 
 FROM node:22-alpine AS runner
@@ -16,11 +17,14 @@ ENV PORT=3000
 
 COPY package*.json ./
 RUN npm ci --omit=dev
+RUN npm install prisma --no-save
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server ./server
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
 
 EXPOSE 3000
 
-CMD ["node", "dist/server.cjs"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.cjs"]

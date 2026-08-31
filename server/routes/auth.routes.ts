@@ -50,7 +50,7 @@ router.post('/login', async (req, res) => {
 
   // Update last login
   user.lastLoginAt = new Date().toISOString();
-  store.users.set(user.id, user);
+  await store.saveUser(user);
 
   const { token, expiresAt } = generateToken(user);
 

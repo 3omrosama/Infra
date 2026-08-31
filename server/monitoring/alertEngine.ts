@@ -68,7 +68,7 @@ class AlertEngine {
             updatedAt: new Date().toISOString()
           };
 
-          store.alerts.set(alert.id, alert);
+          store.saveAlert(alert);
           await dispatchNotification(alert);
 
           store.addEvent({
@@ -91,7 +91,7 @@ class AlertEngine {
     alert.acknowledgedAt = new Date().toISOString();
     alert.acknowledgedBy = username;
     alert.updatedAt = new Date().toISOString();
-    store.alerts.set(alert.id, alert);
+    store.saveAlert(alert);
 
     store.addEvent({
       connectionId: alert.connectionId,
@@ -112,7 +112,7 @@ class AlertEngine {
     alert.resolvedAt = new Date().toISOString();
     alert.resolvedBy = username;
     alert.updatedAt = new Date().toISOString();
-    store.alerts.set(alert.id, alert);
+    store.saveAlert(alert);
 
     store.addEvent({
       connectionId: alert.connectionId,

@@ -42,7 +42,7 @@ router.post('/', authenticateToken, requireRole('ADMIN'), async (req: Authentica
     createdAt: new Date().toISOString()
   };
 
-  store.users.set(newUser.id, newUser);
+  await store.saveUser(newUser);
 
   logAuditAction({
     userId: req.user?.id,
@@ -76,7 +76,7 @@ router.put('/:id', authenticateToken, requireRole('ADMIN'), async (req: Authenti
     user.passwordHash = await hashPassword(password);
   }
 
-  store.users.set(id, user);
+  await store.saveUser(user);
 
   logAuditAction({
     userId: req.user?.id,
@@ -93,7 +93,7 @@ router.put('/:id', authenticateToken, requireRole('ADMIN'), async (req: Authenti
 });
 
 // Delete user (Admin only)
-router.delete('/:id', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:id', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
 
   if (req.user?.id === id) {
@@ -107,7 +107,7 @@ router.delete('/:id', authenticateToken, requireRole('ADMIN'), (req: Authenticat
     return;
   }
 
-  store.users.delete(id);
+  await store.deleteUser(id);
 
   logAuditAction({
     userId: req.user?.id,

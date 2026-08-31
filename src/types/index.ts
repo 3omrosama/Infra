@@ -383,3 +383,16 @@ export interface InfrastructureProvider {
   executeAppAction?(appId: string, action: 'start' | 'stop' | 'restart'): Promise<{ success: boolean; message: string }>;
   executeContainerAction?(containerId: string, action: 'start' | 'stop' | 'restart'): Promise<{ success: boolean; message: string }>;
 }
+
+export interface SystemSettings {
+  pollIntervalSec: number;
+  metricRetentionDays: number;
+  demoMode: boolean;
+  webhookUrl?: string;
+  emailAlertsEnabled: boolean;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
+  smtpFrom?: string;
+  autoResolveMinutes?: number;
+}

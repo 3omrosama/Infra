@@ -13,7 +13,7 @@ export async function dispatchNotification(alert: Alert) {
     payload: { alertId: alert.id, source: alert.source },
     createdAt: new Date().toISOString()
   };
-  store.notifications.set(notif.id, notif);
+  store.saveNotification(notif);
 
   // 2. Webhook Notification (if configured)
   const webhookUrl = store.settings.webhookUrl;

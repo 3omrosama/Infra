@@ -61,7 +61,7 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
     newConn.status = 'DEGRADED';
     newConn.errorDetails = testRes.message;
   }
-  store.connections.set(newConn.id, newConn);
+  await store.saveConnection(newConn);
 
   logAuditAction({
     userId: req.user?.id,
@@ -148,7 +148,7 @@ router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (r
   }
 
   conn.updatedAt = new Date().toISOString();
-  store.connections.set(id, conn);
+  await store.saveConnection(conn);
   providerRegistry.removeProvider(id); // reset cached client instance
 
   logAuditAction({
@@ -168,7 +168,7 @@ router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (r
 });
 
 // Delete connection
-router.delete('/:id', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:id', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const conn = store.connections.get(id);
   if (!conn) {
@@ -177,7 +177,7 @@ router.delete('/:id', authenticateToken, requireRole('ADMIN'), (req: Authenticat
   }
 
   providerRegistry.removeProvider(id);
-  store.connections.delete(id);
+  await store.deleteConnection(id);
 
   // Clean up associated VMs/Hosts/Apps
   Array.from(store.virtualMachines.values()).forEach(vm => {

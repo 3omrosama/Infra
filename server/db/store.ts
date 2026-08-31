@@ -1,30 +1,33 @@
-import { 
-  User, 
-  UserRole, 
-  InfrastructureConnection, 
-  ESXiHost, 
-  VirtualMachine, 
-  CasaOSServer, 
-  CasaOSApp, 
-  DockerContainer, 
-  DockerImage, 
-  DockerVolume, 
-  Alert, 
-  AlertRule, 
-  NotificationItem, 
-  SystemEvent, 
-  AuditLog, 
+import {
+  UserRole,
+  InfrastructureConnection,
+  ESXiHost,
+  VirtualMachine,
+  CasaOSServer,
+  CasaOSApp,
+  DockerContainer,
+  DockerImage,
+  DockerVolume,
   MetricDataPoint,
-  DatastoreInfo,
-  NetworkInfo
+  AlertRule,
+  Alert,
+  NotificationItem,
+  SystemEvent,
+  AuditLog,
+  SystemSettings
 } from '../../src/types/index.js';
-import { DEMO_ACCOUNTS } from '../../src/constants/demoAccounts.js';
 import { hashPassword, encryptSecret } from '../crypto.js';
-import fs from 'fs';
-import path from 'path';
+import { prisma, checkDatabaseConnection } from './prisma.js';
 
-export interface StoredUser extends User {
+export interface StoredUser {
+  id: string;
+  username: string;
+  email: string;
   passwordHash: string;
+  role: UserRole;
+  isActive: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
 }
 
 export interface StoredConnection extends InfrastructureConnection {
@@ -33,22 +36,8 @@ export interface StoredConnection extends InfrastructureConnection {
   secretTag?: string;
 }
 
-export interface SystemSettings {
-  pollIntervalSec: number;
-  metricRetentionDays: number;
-  demoMode: boolean;
-  webhookUrl: string;
-  emailAlertsEnabled: boolean;
-  smtpHost: string;
-  smtpPort: number;
-  smtpUser: string;
-  smtpFrom: string;
-  autoResolveMinutes: number;
-}
-
-class DataStore {
+export class DataStore {
   public users: Map<string, StoredUser> = new Map();
-  public sessions: Map<string, { userId: string; expiresAt: Date; ipAddress?: string }> = new Map();
   public connections: Map<string, StoredConnection> = new Map();
   public esxiHosts: Map<string, ESXiHost> = new Map();
   public virtualMachines: Map<string, VirtualMachine> = new Map();
@@ -63,7 +52,6 @@ class DataStore {
   public notifications: Map<string, NotificationItem> = new Map();
   public events: SystemEvent[] = [];
   public auditLogs: AuditLog[] = [];
-  
   public settings: SystemSettings = {
     pollIntervalSec: 30,
     metricRetentionDays: 30,
@@ -77,32 +65,180 @@ class DataStore {
     autoResolveMinutes: 120
   };
 
-  private initialized = false;
+  private isDbConnected: boolean = false;
 
   public async init() {
-    if (this.initialized) return;
-    this.initialized = true;
+    console.log('[DataStore] Initializing PostgreSQL database store...');
+    this.isDbConnected = await checkDatabaseConnection();
 
-    // Seed default roles and demo users from single source of truth
-    for (const account of DEMO_ACCOUNTS) {
-      const passwordHash = await hashPassword(account.password);
-      const user: StoredUser = {
-        id: account.id,
-        username: account.username,
-        email: account.email,
-        passwordHash,
-        role: account.role,
-        isActive: true,
-        createdAt: new Date().toISOString()
-      };
-      this.users.set(user.id, user);
+    if (this.isDbConnected) {
+      console.log('[DataStore] PostgreSQL connected. Synchronizing schema & seed data...');
+      try {
+        await this.syncDatabase();
+      } catch (err: any) {
+        console.error('[DataStore] Error during DB synchronization:', err?.message || err);
+      }
+    } else {
+      console.warn('[DataStore] PostgreSQL database connection unavailable. Using in-memory store fallback.');
+      await this.seedInMemoryFallback();
     }
+  }
 
-    // Seed default Alert Rules
+  /**
+   * Synchronize with PostgreSQL database
+   */
+  private async syncDatabase() {
+    // 1. Ensure Roles exist
+    await this.ensureRoles();
+
+    // 2. Ensure System Settings exist
+    await this.ensureSettings();
+
+    // 3. Ensure Default Users exist
+    await this.ensureDefaultUsers();
+
+    // 4. Ensure Default Alert Rules exist
+    await this.ensureDefaultAlertRules();
+
+    // 5. Load all state from PostgreSQL into memory
+    await this.loadAllFromDatabase();
+
+    // 6. If database is completely empty of connections and demoMode is enabled, seed demo topology
+    if (this.connections.size === 0 && this.settings.demoMode) {
+      console.log('[DataStore] No existing connections found and Demo Mode is ON. Seeding initial demo topology...');
+      await this.seedDemoData();
+    }
+  }
+
+  private async ensureRoles() {
+    const roles: Array<{ name: UserRole; description: string; permissions: string[] }> = [
+      {
+        name: 'ADMIN',
+        description: 'Full administrative access across all infrastructure, credentials, and settings',
+        permissions: ['*']
+      },
+      {
+        name: 'OPERATOR',
+        description: 'Operational privileges to acknowledge alerts and execute power/container actions',
+        permissions: ['view:*', 'action:vm:*', 'action:container:*', 'alert:ack', 'alert:resolve']
+      },
+      {
+        name: 'VIEWER',
+        description: 'Read-only visibility for infrastructure monitoring, metrics, and logs',
+        permissions: ['view:*']
+      }
+    ];
+
+    for (const r of roles) {
+      await prisma.role.upsert({
+        where: { name: r.name },
+        update: { description: r.description },
+        create: {
+          name: r.name,
+          description: r.description,
+          permissions: r.permissions
+        }
+      });
+    }
+  }
+
+  private async ensureSettings() {
+    const dbSetting = await prisma.systemSetting.findUnique({
+      where: { id: 'default' }
+    });
+
+    if (dbSetting) {
+      this.settings = {
+        pollIntervalSec: dbSetting.pollIntervalSec,
+        metricRetentionDays: dbSetting.metricRetentionDays,
+        demoMode: dbSetting.demoMode,
+        webhookUrl: dbSetting.webhookUrl,
+        emailAlertsEnabled: dbSetting.emailAlertsEnabled,
+        smtpHost: dbSetting.smtpHost,
+        smtpPort: dbSetting.smtpPort,
+        smtpUser: dbSetting.smtpUser,
+        smtpFrom: dbSetting.smtpFrom,
+        autoResolveMinutes: dbSetting.autoResolveMinutes
+      };
+    } else {
+      const created = await prisma.systemSetting.create({
+        data: {
+          id: 'default',
+          pollIntervalSec: this.settings.pollIntervalSec,
+          metricRetentionDays: this.settings.metricRetentionDays,
+          demoMode: this.settings.demoMode,
+          webhookUrl: this.settings.webhookUrl,
+          emailAlertsEnabled: this.settings.emailAlertsEnabled,
+          smtpHost: this.settings.smtpHost,
+          smtpPort: this.settings.smtpPort,
+          smtpUser: this.settings.smtpUser,
+          smtpFrom: this.settings.smtpFrom,
+          autoResolveMinutes: this.settings.autoResolveMinutes
+        }
+      });
+      this.settings.pollIntervalSec = created.pollIntervalSec;
+    }
+  }
+
+  private async ensureDefaultUsers() {
+    const adminRole = await prisma.role.findUnique({ where: { name: 'ADMIN' } });
+    const operatorRole = await prisma.role.findUnique({ where: { name: 'OPERATOR' } });
+    const viewerRole = await prisma.role.findUnique({ where: { name: 'VIEWER' } });
+
+    const defaultUsers = [
+      {
+        id: 'usr-admin-01',
+        username: 'admin',
+        email: 'admin@noc-infrastructure.local',
+        password: 'AdminNocPass2026!',
+        role: 'ADMIN' as UserRole,
+        roleId: adminRole?.id
+      },
+      {
+        id: 'usr-operator-01',
+        username: 'operator',
+        email: 'operator@noc-infrastructure.local',
+        password: 'OperatorNocPass2026!',
+        role: 'OPERATOR' as UserRole,
+        roleId: operatorRole?.id
+      },
+      {
+        id: 'usr-viewer-01',
+        username: 'viewer',
+        email: 'viewer@noc-infrastructure.local',
+        password: 'ViewerNocPass2026!',
+        role: 'VIEWER' as UserRole,
+        roleId: viewerRole?.id
+      }
+    ];
+
+    for (const u of defaultUsers) {
+      const existing = await prisma.user.findUnique({
+        where: { username: u.username }
+      });
+
+      if (!existing) {
+        const passwordHash = await hashPassword(u.password);
+        await prisma.user.create({
+          data: {
+            id: u.id,
+            username: u.username,
+            email: u.email,
+            passwordHash,
+            roleId: u.roleId,
+            roleName: u.role,
+            isActive: true
+          }
+        });
+      }
+    }
+  }
+
+  private async ensureDefaultAlertRules() {
     const defaultRules: AlertRule[] = [
       {
-        id: 'rule-cpu-high',
-        name: 'High CPU Utilization (> 90%)',
+        id: 'rule-cpu-critical',
+        name: 'High CPU Utilization Critical',
         metric: 'cpu',
         condition: 'gt',
         threshold: 90,
@@ -112,11 +248,22 @@ class DataStore {
         createdAt: new Date().toISOString()
       },
       {
-        id: 'rule-mem-high',
-        name: 'High Memory Utilization (> 90%)',
+        id: 'rule-cpu-warning',
+        name: 'Elevated CPU Utilization',
+        metric: 'cpu',
+        condition: 'gt',
+        threshold: 75,
+        durationSec: 120,
+        severity: 'WARNING',
+        isEnabled: true,
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: 'rule-mem-critical',
+        name: 'Memory Exhaustion Critical',
         metric: 'memory',
         condition: 'gt',
-        threshold: 90,
+        threshold: 92,
         durationSec: 60,
         severity: 'CRITICAL',
         isEnabled: true,
@@ -124,7 +271,7 @@ class DataStore {
       },
       {
         id: 'rule-storage-warning',
-        name: 'Storage Pool Warning (> 85%)',
+        name: 'Storage Volume Capacity High',
         metric: 'storage',
         condition: 'gt',
         threshold: 85,
@@ -134,927 +281,1513 @@ class DataStore {
         createdAt: new Date().toISOString()
       },
       {
-        id: 'rule-storage-critical',
-        name: 'Storage Pool Critical (> 95%)',
-        metric: 'storage',
-        condition: 'gt',
-        threshold: 95,
-        durationSec: 120,
-        severity: 'CRITICAL',
-        isEnabled: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'rule-host-offline',
-        name: 'Host Offline or Unreachable',
+        id: 'rule-node-offline',
+        name: 'Infrastructure Node Disconnected',
         metric: 'status',
         condition: 'offline',
         threshold: 1,
-        durationSec: 30,
+        durationSec: 10,
         severity: 'CRITICAL',
         isEnabled: true,
         createdAt: new Date().toISOString()
       }
     ];
 
-    defaultRules.forEach(rule => this.alertRules.set(rule.id, rule));
-
-    // Seed initial Demo connections and infrastructure if Demo Mode enabled
-    if (this.settings.demoMode) {
-      this.seedDemoData();
+    for (const rule of defaultRules) {
+      const existing = await prisma.alertRule.findUnique({ where: { id: rule.id } });
+      if (!existing) {
+        await prisma.alertRule.create({
+          data: {
+            id: rule.id,
+            name: rule.name,
+            metric: rule.metric,
+            condition: rule.condition,
+            threshold: rule.threshold,
+            durationSec: rule.durationSec,
+            severity: rule.severity,
+            isEnabled: rule.isEnabled,
+            createdAt: new Date(rule.createdAt)
+          }
+        });
+      }
     }
-
-    // Seed initial audit log
-    this.addAuditLog({
-      userId: 'usr-admin-001',
-      username: 'admin',
-      action: 'SYSTEM_BOOT',
-      resourceType: 'SYSTEM',
-      details: 'NOC Infrastructure Manager monitoring daemon booted successfully',
-      ipAddress: '127.0.0.1',
-      status: 'SUCCESS'
-    });
   }
 
-  public seedDemoData() {
-    // 1. ESXi Enterprise Node 1
-    const esxiConn1: StoredConnection = {
+  /**
+   * Load all tables from PostgreSQL into memory caches
+   */
+  public async loadAllFromDatabase() {
+    // 1. Users
+    const dbUsers = await prisma.user.findMany({
+      include: { role: true }
+    });
+    this.users.clear();
+    for (const u of dbUsers) {
+      const roleName: UserRole = (u.role?.name || u.roleName || 'VIEWER') as UserRole;
+      this.users.set(u.id, {
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        passwordHash: u.passwordHash,
+        role: roleName,
+        isActive: u.isActive,
+        lastLoginAt: u.lastLoginAt?.toISOString(),
+        createdAt: u.createdAt.toISOString()
+      });
+    }
+
+    // 2. Connections
+    const dbConnections = await prisma.infrastructureConnection.findMany({
+      orderBy: { createdAt: 'asc' }
+    });
+    this.connections.clear();
+    for (const c of dbConnections) {
+      this.connections.set(c.id, {
+        id: c.id,
+        name: c.name,
+        type: c.type as any,
+        host: c.host,
+        port: c.port,
+        useHttps: c.useHttps,
+        skipSslVerify: c.skipSslVerify,
+        username: c.username || undefined,
+        encryptedSecret: c.encryptedSecret || undefined,
+        secretIv: c.secretIv || undefined,
+        secretTag: c.secretTag || undefined,
+        status: c.status as any,
+        lastSeen: c.lastSeen?.toISOString(),
+        lastCheckedAt: c.lastCheckedAt?.toISOString(),
+        errorDetails: c.errorDetails || undefined,
+        pollIntervalSec: c.pollIntervalSec,
+        isEnabled: c.isEnabled,
+        isDemo: c.isDemo,
+        createdAt: c.createdAt.toISOString(),
+        updatedAt: c.updatedAt.toISOString()
+      });
+    }
+
+    // 3. Hosts
+    const dbHosts = await prisma.host.findMany();
+    this.esxiHosts.clear();
+    for (const h of dbHosts) {
+      this.esxiHosts.set(h.id, {
+        id: h.id,
+        connectionId: h.connectionId,
+        hostname: h.hostname,
+        ipAddress: h.ipAddress,
+        version: h.version,
+        build: h.build || undefined,
+        cpuModel: h.cpuModel || 'Generic x86_64 Processor',
+        cpuCores: h.cpuCores,
+        cpuMhzTotal: h.cpuMhzTotal || undefined,
+        cpuUsagePct: h.cpuUsagePct,
+        memoryBytesTotal: Number(h.memoryBytesTotal),
+        memoryUsagePct: h.memoryUsagePct,
+        storageBytesTotal: Number(h.storageBytesTotal),
+        storageBytesUsed: Number(h.storageBytesUsed),
+        storageUsagePct: h.storageUsagePct,
+        uptimeSeconds: Number(h.uptimeSeconds),
+        powerState: h.powerState as any,
+        vmCount: h.vmCount,
+        runningVmCount: h.runningVmCount,
+        datastores: (h.datastores as any) || [],
+        networks: (h.networksJson as any) || []
+      });
+    }
+
+    // 4. Virtual Machines
+    const dbVms = await prisma.virtualMachine.findMany();
+    this.virtualMachines.clear();
+    for (const vm of dbVms) {
+      this.virtualMachines.set(vm.id, {
+        id: vm.id,
+        connectionId: vm.connectionId,
+        hostId: vm.hostId || undefined,
+        externalVmId: vm.externalVmId,
+        name: vm.name,
+        powerState: vm.powerState as any,
+        cpuCount: vm.cpuCount,
+        cpuUsagePct: vm.cpuUsagePct,
+        memoryBytes: Number(vm.memoryBytes),
+        memoryUsagePct: vm.memoryUsagePct,
+        storageBytes: Number(vm.storageBytes),
+        storageUsagePct: vm.storageUsagePct,
+        ipAddress: vm.ipAddress || undefined,
+        guestOs: vm.guestOs || 'Linux 64-bit',
+        uptimeSeconds: Number(vm.uptimeSeconds),
+        datastoreName: vm.datastoreName || undefined,
+        networkName: vm.networkName || undefined,
+        createdAt: vm.createdAt.toISOString(),
+        updatedAt: vm.updatedAt.toISOString()
+      });
+    }
+
+    // 5. CasaOS Servers
+    const dbCasaServers = await prisma.casaOSServer.findMany();
+    this.casaosServers.clear();
+    for (const s of dbCasaServers) {
+      this.casaosServers.set(s.id, {
+        id: s.id,
+        connectionId: s.connectionId,
+        hostname: s.hostname,
+        ipAddress: s.ipAddress,
+        version: s.version,
+        uptimeSeconds: Number(s.uptimeSeconds),
+        cpuModel: s.cpuModel || 'Intel / AMD Embedded CPU',
+        cpuCores: s.cpuCores,
+        cpuUsagePct: s.cpuUsagePct,
+        memoryBytesTotal: Number(s.memoryBytesTotal),
+        memoryBytesUsed: Number(s.memoryBytesUsed),
+        memoryUsagePct: s.memoryUsagePct,
+        storageBytesTotal: Number(s.storageBytesTotal),
+        storageBytesUsed: Number(s.storageBytesUsed),
+        storageUsagePct: s.storageUsagePct,
+        diskCount: s.diskCount,
+        runningAppsCount: s.runningAppsCount,
+        totalAppsCount: s.totalAppsCount,
+        dockerVersion: s.dockerVersion || '24.0.7',
+        disks: (s.disks as any) || []
+      });
+    }
+
+    // 6. Containers (Docker & CasaOS Apps)
+    const dbContainers = await prisma.container.findMany();
+    this.dockerContainers.clear();
+    this.casaosApps.clear();
+    for (const c of dbContainers) {
+      if (c.isCasaOsApp) {
+        this.casaosApps.set(c.id, {
+          id: c.id,
+          connectionId: c.connectionId,
+          containerId: c.externalId,
+          name: c.name,
+          title: c.appTitle || c.name,
+          icon: c.appIcon || 'server',
+          status: (c.status === 'running' || c.status === 'stopped' || c.status === 'restarting' || c.status === 'error') ? c.status : 'running',
+          category: c.appCategory || 'General',
+          image: c.image,
+          cpuUsagePct: c.cpuUsagePct,
+          memoryBytes: Number(c.memoryBytes),
+          memoryUsagePct: c.memoryUsagePct,
+          networkRxBytes: Number(c.networkRxBytes),
+          networkTxBytes: Number(c.networkTxBytes),
+          restartCount: c.restartCount,
+          ports: (c.ports as any) || [],
+          volumes: (c.volumes as any) || [],
+          uptimeSeconds: Number(c.uptimeSeconds),
+          createdAt: c.createdAt.toISOString()
+        });
+      } else {
+        this.dockerContainers.set(c.id, {
+          id: c.id,
+          connectionId: c.connectionId,
+          containerId: c.externalId,
+          name: c.name,
+          image: c.image,
+          state: (c.status === 'running' || c.status === 'exited' || c.status === 'paused' || c.status === 'restarting') ? c.status : 'running',
+          status: c.status,
+          cpuUsagePct: c.cpuUsagePct,
+          memoryBytes: Number(c.memoryBytes),
+          memoryLimitBytes: Number(c.memoryLimitBytes),
+          memoryUsagePct: c.memoryUsagePct,
+          networkTxBytes: Number(c.networkTxBytes),
+          networkRxBytes: Number(c.networkRxBytes),
+          ports: (c.ports as any) || [],
+          mounts: (c.volumes as any) || [],
+          restartCount: c.restartCount,
+          created: c.createdAt.toISOString()
+        });
+      }
+    }
+
+    // 7. Docker Images & Volumes
+    const dbImages = await prisma.dockerImage.findMany();
+    this.dockerImages.clear();
+    for (const img of dbImages) {
+      this.dockerImages.set(img.id, {
+        id: img.id,
+        repoTags: [img.repository ? `${img.repository}:${img.tag || 'latest'}` : img.imageId],
+        sizeBytes: Number(img.sizeBytes),
+        created: img.created.toISOString()
+      });
+    }
+
+    const dbVolumes = await prisma.dockerVolume.findMany();
+    this.dockerVolumes.clear();
+    for (const v of dbVolumes) {
+      this.dockerVolumes.set(v.id, {
+        name: v.name,
+        driver: v.driver,
+        scope: v.scope,
+        sizeBytes: Number(v.sizeBytes)
+      });
+    }
+
+    // 8. Alert Rules
+    const dbRules = await prisma.alertRule.findMany({ orderBy: { createdAt: 'asc' } });
+    this.alertRules.clear();
+    for (const r of dbRules) {
+      this.alertRules.set(r.id, {
+        id: r.id,
+        name: r.name,
+        metric: r.metric as any,
+        condition: r.condition as any,
+        threshold: r.threshold,
+        durationSec: r.durationSec,
+        severity: r.severity as any,
+        isEnabled: r.isEnabled,
+        targetType: r.targetType as any,
+        createdAt: r.createdAt.toISOString()
+      });
+    }
+
+    // 9. Alerts
+    const dbAlerts = await prisma.alert.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
+    this.alerts.clear();
+    for (const a of dbAlerts) {
+      this.alerts.set(a.id, {
+        id: a.id,
+        connectionId: a.connectionId || undefined,
+        title: a.title,
+        message: a.message,
+        severity: a.severity as any,
+        status: a.status as any,
+        source: a.source,
+        resourceType: a.resourceType as any,
+        resourceId: a.resourceId || undefined,
+        valueObserved: a.valueObserved || undefined,
+        threshold: a.threshold || undefined,
+        acknowledgedAt: a.acknowledgedAt?.toISOString(),
+        acknowledgedBy: a.acknowledgedBy || undefined,
+        resolvedAt: a.resolvedAt?.toISOString(),
+        resolvedBy: a.resolvedBy || undefined,
+        createdAt: a.createdAt.toISOString(),
+        updatedAt: a.updatedAt.toISOString()
+      });
+    }
+
+    // 10. Notifications
+    const dbNotifications = await prisma.notification.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100
+    });
+    this.notifications.clear();
+    for (const n of dbNotifications) {
+      this.notifications.set(n.id, {
+        id: n.id,
+        title: n.title,
+        message: n.message,
+        severity: n.severity as any,
+        isRead: n.isRead,
+        channel: n.channel as any,
+        payload: (n.payload as any) || undefined,
+        createdAt: n.createdAt.toISOString()
+      });
+    }
+
+    // 11. Events
+    const dbEvents = await prisma.event.findMany({
+      orderBy: { timestamp: 'desc' },
+      take: 150
+    });
+    this.events = dbEvents.map(e => ({
+      id: e.id,
+      connectionId: e.connectionId || undefined,
+      eventType: e.eventType,
+      severity: e.severity as any,
+      source: e.source,
+      message: e.message,
+      metadata: (e.metadata as any) || undefined,
+      timestamp: e.timestamp.toISOString()
+    }));
+
+    // 12. Audit Logs
+    const dbAuditLogs = await prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
+    this.auditLogs = dbAuditLogs.map(l => ({
+      id: l.id,
+      userId: l.userId || undefined,
+      username: l.username || undefined,
+      connectionId: l.connectionId || undefined,
+      action: l.action,
+      resourceType: l.resourceType,
+      resourceId: l.resourceId || undefined,
+      details: l.details,
+      ipAddress: l.ipAddress || undefined,
+      status: l.status as any,
+      createdAt: l.createdAt.toISOString()
+    }));
+
+    // 13. Metrics
+    const dbMetrics = await prisma.metric.findMany({
+      orderBy: { timestamp: 'desc' },
+      take: 168
+    });
+    this.metrics = dbMetrics.reverse().map(m => ({
+      timestamp: m.timestamp.toISOString(),
+      cpu: m.cpuPct,
+      memory: m.memoryPct,
+      storage: m.storagePct || 0,
+      networkRxKbps: m.networkRxKbps,
+      networkTxKbps: m.networkTxKbps
+    }));
+
+    // If no metrics in DB yet, generate initial baseline
+    if (this.metrics.length === 0) {
+      this.generateBaselineMetrics();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Persistence Methods (Write-Through to PostgreSQL)
+  // --------------------------------------------------------------------------
+
+  public async saveUser(user: StoredUser): Promise<void> {
+    this.users.set(user.id, user);
+    if (!this.isDbConnected) return;
+
+    try {
+      const role = await prisma.role.findUnique({ where: { name: user.role } });
+      await prisma.user.upsert({
+        where: { id: user.id },
+        update: {
+          username: user.username,
+          email: user.email,
+          passwordHash: user.passwordHash,
+          roleId: role?.id,
+          roleName: user.role,
+          isActive: user.isActive,
+          lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null
+        },
+        create: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          passwordHash: user.passwordHash,
+          roleId: role?.id,
+          roleName: user.role,
+          isActive: user.isActive,
+          lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt) : null,
+          createdAt: new Date(user.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist user '${user.username}':`, err?.message || err);
+    }
+  }
+
+  public async deleteUser(id: string): Promise<void> {
+    this.users.delete(id);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.user.delete({ where: { id } }).catch(() => {});
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to delete user '${id}' from DB:`, err?.message || err);
+    }
+  }
+
+  public async saveConnection(conn: StoredConnection): Promise<void> {
+    this.connections.set(conn.id, conn);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.infrastructureConnection.upsert({
+        where: { id: conn.id },
+        update: {
+          name: conn.name,
+          type: conn.type as any,
+          host: conn.host,
+          port: conn.port,
+          useHttps: conn.useHttps,
+          skipSslVerify: conn.skipSslVerify,
+          username: conn.username,
+          encryptedSecret: conn.encryptedSecret,
+          secretIv: conn.secretIv,
+          secretTag: conn.secretTag,
+          status: conn.status as any,
+          lastSeen: conn.lastSeen ? new Date(conn.lastSeen) : null,
+          lastCheckedAt: conn.lastCheckedAt ? new Date(conn.lastCheckedAt) : null,
+          errorDetails: conn.errorDetails,
+          pollIntervalSec: conn.pollIntervalSec,
+          isEnabled: conn.isEnabled,
+          isDemo: conn.isDemo || false
+        },
+        create: {
+          id: conn.id,
+          name: conn.name,
+          type: conn.type as any,
+          host: conn.host,
+          port: conn.port,
+          useHttps: conn.useHttps,
+          skipSslVerify: conn.skipSslVerify,
+          username: conn.username,
+          encryptedSecret: conn.encryptedSecret,
+          secretIv: conn.secretIv,
+          secretTag: conn.secretTag,
+          status: conn.status as any,
+          lastSeen: conn.lastSeen ? new Date(conn.lastSeen) : null,
+          lastCheckedAt: conn.lastCheckedAt ? new Date(conn.lastCheckedAt) : null,
+          errorDetails: conn.errorDetails,
+          pollIntervalSec: conn.pollIntervalSec,
+          isEnabled: conn.isEnabled,
+          isDemo: conn.isDemo || false,
+          createdAt: new Date(conn.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist connection '${conn.name}':`, err?.message || err);
+    }
+  }
+
+  public async deleteConnection(id: string): Promise<void> {
+    this.connections.delete(id);
+    // Remove all associated child resources from in-memory maps
+    Array.from(this.esxiHosts.values()).filter(h => h.connectionId === id).forEach(h => this.esxiHosts.delete(h.id));
+    Array.from(this.virtualMachines.values()).filter(v => v.connectionId === id).forEach(v => this.virtualMachines.delete(v.id));
+    Array.from(this.casaosServers.values()).filter(s => s.connectionId === id).forEach(s => this.casaosServers.delete(s.id));
+    Array.from(this.casaosApps.values()).filter(a => a.connectionId === id).forEach(a => this.casaosApps.delete(a.id));
+    Array.from(this.dockerContainers.values()).filter(c => c.connectionId === id).forEach(c => this.dockerContainers.delete(c.id));
+    Array.from(this.dockerImages.values()).filter(img => img.id === id).forEach(img => this.dockerImages.delete(img.id));
+
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.infrastructureConnection.delete({ where: { id } }).catch(() => {});
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to delete connection '${id}' from DB:`, err?.message || err);
+    }
+  }
+
+  public async saveAlert(alert: Alert): Promise<void> {
+    this.alerts.set(alert.id, alert);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.alert.upsert({
+        where: { id: alert.id },
+        update: {
+          title: alert.title,
+          message: alert.message,
+          severity: alert.severity as any,
+          status: alert.status as any,
+          source: alert.source,
+          resourceType: alert.resourceType as any,
+          resourceId: alert.resourceId,
+          valueObserved: alert.valueObserved,
+          threshold: alert.threshold,
+          acknowledgedAt: alert.acknowledgedAt ? new Date(alert.acknowledgedAt) : null,
+          acknowledgedBy: alert.acknowledgedBy,
+          resolvedAt: alert.resolvedAt ? new Date(alert.resolvedAt) : null,
+          resolvedBy: alert.resolvedBy
+        },
+        create: {
+          id: alert.id,
+          connectionId: alert.connectionId,
+          title: alert.title,
+          message: alert.message,
+          severity: alert.severity as any,
+          status: alert.status as any,
+          source: alert.source,
+          resourceType: alert.resourceType as any,
+          resourceId: alert.resourceId,
+          valueObserved: alert.valueObserved,
+          threshold: alert.threshold,
+          acknowledgedAt: alert.acknowledgedAt ? new Date(alert.acknowledgedAt) : null,
+          acknowledgedBy: alert.acknowledgedBy,
+          resolvedAt: alert.resolvedAt ? new Date(alert.resolvedAt) : null,
+          resolvedBy: alert.resolvedBy,
+          createdAt: new Date(alert.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist alert '${alert.title}':`, err?.message || err);
+    }
+  }
+
+  public async saveAlertRule(rule: AlertRule): Promise<void> {
+    this.alertRules.set(rule.id, rule);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.alertRule.upsert({
+        where: { id: rule.id },
+        update: {
+          name: rule.name,
+          metric: rule.metric,
+          condition: rule.condition,
+          threshold: rule.threshold,
+          durationSec: rule.durationSec,
+          severity: rule.severity as any,
+          isEnabled: rule.isEnabled,
+          targetType: rule.targetType as any
+        },
+        create: {
+          id: rule.id,
+          name: rule.name,
+          metric: rule.metric,
+          condition: rule.condition,
+          threshold: rule.threshold,
+          durationSec: rule.durationSec,
+          severity: rule.severity as any,
+          isEnabled: rule.isEnabled,
+          targetType: rule.targetType as any,
+          createdAt: new Date(rule.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist alert rule '${rule.name}':`, err?.message || err);
+    }
+  }
+
+  public async deleteAlertRule(id: string): Promise<void> {
+    this.alertRules.delete(id);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.alertRule.delete({ where: { id } }).catch(() => {});
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to delete alert rule '${id}':`, err?.message || err);
+    }
+  }
+
+  public async saveNotification(notif: NotificationItem): Promise<void> {
+    this.notifications.set(notif.id, notif);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.notification.upsert({
+        where: { id: notif.id },
+        update: {
+          isRead: notif.isRead
+        },
+        create: {
+          id: notif.id,
+          title: notif.title,
+          message: notif.message,
+          severity: notif.severity as any,
+          isRead: notif.isRead,
+          channel: notif.channel || 'IN_APP',
+          payload: (notif.payload as any) || undefined,
+          createdAt: new Date(notif.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist notification:`, err?.message || err);
+    }
+  }
+
+  public async saveEvent(event: SystemEvent): Promise<void> {
+    this.events.unshift(event);
+    if (this.events.length > 200) this.events.pop();
+
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.event.create({
+        data: {
+          id: event.id,
+          connectionId: event.connectionId,
+          eventType: event.eventType,
+          severity: event.severity as any,
+          source: event.source,
+          message: event.message,
+          metadata: (event.metadata as any) || undefined,
+          timestamp: new Date(event.timestamp)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist event:`, err?.message || err);
+    }
+  }
+
+  public async saveAuditLog(log: AuditLog): Promise<void> {
+    this.auditLogs.unshift(log);
+    if (this.auditLogs.length > 200) this.auditLogs.pop();
+
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.auditLog.create({
+        data: {
+          id: log.id,
+          userId: log.userId,
+          username: log.username,
+          connectionId: log.connectionId,
+          action: log.action,
+          resourceType: log.resourceType,
+          resourceId: log.resourceId,
+          details: log.details,
+          ipAddress: log.ipAddress,
+          status: log.status || 'SUCCESS',
+          createdAt: new Date(log.createdAt)
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist audit log:`, err?.message || err);
+    }
+  }
+
+  public async saveMetric(metric: MetricDataPoint): Promise<void> {
+    this.metrics.push(metric);
+    if (this.metrics.length > 300) {
+      this.metrics.shift();
+    }
+
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.metric.create({
+        data: {
+          cpuPct: metric.cpu,
+          memoryPct: metric.memory,
+          storagePct: metric.storage,
+          networkRxKbps: metric.networkRxKbps,
+          networkTxKbps: metric.networkTxKbps,
+          timestamp: new Date(metric.timestamp)
+        }
+      });
+    } catch (err: any) {
+      // Metric error should not interrupt telemetry
+    }
+  }
+
+  public async saveSettings(settings: SystemSettings): Promise<void> {
+    this.settings = { ...settings };
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.systemSetting.upsert({
+        where: { id: 'default' },
+        update: {
+          pollIntervalSec: settings.pollIntervalSec,
+          metricRetentionDays: settings.metricRetentionDays,
+          demoMode: settings.demoMode,
+          webhookUrl: settings.webhookUrl || '',
+          emailAlertsEnabled: settings.emailAlertsEnabled,
+          smtpHost: settings.smtpHost || '',
+          smtpPort: settings.smtpPort,
+          smtpUser: settings.smtpUser || '',
+          smtpFrom: settings.smtpFrom,
+          autoResolveMinutes: settings.autoResolveMinutes
+        },
+        create: {
+          id: 'default',
+          pollIntervalSec: settings.pollIntervalSec,
+          metricRetentionDays: settings.metricRetentionDays,
+          demoMode: settings.demoMode,
+          webhookUrl: settings.webhookUrl || '',
+          emailAlertsEnabled: settings.emailAlertsEnabled,
+          smtpHost: settings.smtpHost || '',
+          smtpPort: settings.smtpPort,
+          smtpUser: settings.smtpUser || '',
+          smtpFrom: settings.smtpFrom,
+          autoResolveMinutes: settings.autoResolveMinutes
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist system settings:`, err?.message || err);
+    }
+  }
+
+  public addAuditLog(entry: Omit<AuditLog, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): AuditLog {
+    const log: AuditLog = {
+      id: entry.id || `aud-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      userId: entry.userId,
+      username: entry.username,
+      connectionId: entry.connectionId,
+      action: entry.action,
+      resourceType: entry.resourceType,
+      resourceId: entry.resourceId,
+      details: entry.details,
+      ipAddress: entry.ipAddress,
+      status: entry.status || 'SUCCESS',
+      createdAt: entry.createdAt || new Date().toISOString()
+    };
+    this.saveAuditLog(log);
+    return log;
+  }
+
+  public addEvent(entry: Omit<SystemEvent, 'id' | 'timestamp'> & { id?: string; timestamp?: string }): SystemEvent {
+    const evt: SystemEvent = {
+      id: entry.id || `evt-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      connectionId: entry.connectionId,
+      eventType: entry.eventType,
+      severity: entry.severity,
+      source: entry.source,
+      message: entry.message,
+      metadata: entry.metadata,
+      timestamp: entry.timestamp || new Date().toISOString()
+    };
+    this.saveEvent(evt);
+    return evt;
+  }
+
+  public addMetric(metric: MetricDataPoint): void {
+    this.saveMetric(metric);
+  }
+
+  // --------------------------------------------------------------------------
+  // Baseline Metrics & Demo Seeding
+  // --------------------------------------------------------------------------
+
+  private generateBaselineMetrics() {
+    this.metrics = [];
+    const now = Date.now();
+    for (let i = 48; i >= 0; i--) {
+      const time = new Date(now - i * 30 * 60 * 1000).toISOString();
+      const wave = Math.sin(i / 3) * 12;
+      this.metrics.push({
+        timestamp: time,
+        cpu: Math.max(15, Math.min(95, Math.round((48 + wave + (Math.random() * 8 - 4)) * 10) / 10)),
+        memory: Math.max(30, Math.min(92, Math.round((64 + wave * 0.4 + (Math.random() * 4 - 2)) * 10) / 10)),
+        storage: 62.8,
+        networkRxKbps: Math.round(18400 + wave * 1200 + Math.random() * 2000),
+        networkTxKbps: Math.round(14100 + wave * 900 + Math.random() * 1500)
+      });
+    }
+  }
+
+  private async seedInMemoryFallback() {
+    this.generateBaselineMetrics();
+
+    // Default users in memory
+    const defaultUsers = [
+      {
+        id: 'usr-admin-01',
+        username: 'admin',
+        email: 'admin@noc-infrastructure.local',
+        password: 'AdminNocPass2026!',
+        role: 'ADMIN' as UserRole
+      },
+      {
+        id: 'usr-operator-01',
+        username: 'operator',
+        email: 'operator@noc-infrastructure.local',
+        password: 'OperatorNocPass2026!',
+        role: 'OPERATOR' as UserRole
+      },
+      {
+        id: 'usr-viewer-01',
+        username: 'viewer',
+        email: 'viewer@noc-infrastructure.local',
+        password: 'ViewerNocPass2026!',
+        role: 'VIEWER' as UserRole
+      }
+    ];
+
+    for (const u of defaultUsers) {
+      const passwordHash = await hashPassword(u.password);
+      this.users.set(u.id, {
+        id: u.id,
+        username: u.username,
+        email: u.email,
+        passwordHash,
+        role: u.role,
+        isActive: true,
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    await this.seedDemoData();
+  }
+
+  public async seedDemoData() {
+    const encEsxi = encryptSecret('VMwareEsxiPass2026!');
+    const encCasa = encryptSecret('CasaOsToken9827361');
+    const encDocker = encryptSecret('DockerSocketTlsKey');
+
+    // 1. ESXi Host & VMs
+    const esxiConn: StoredConnection = {
       id: 'conn-esxi-prod-01',
-      name: 'ESXi Enterprise Cluster Node 01',
+      name: 'ESXi Production Cluster (vCenter 8.0)',
       type: 'ESXI',
-      host: '10.20.0.10',
+      host: '10.240.10.15',
       port: 443,
       useHttps: true,
       skipSslVerify: true,
       username: 'root',
+      encryptedSecret: encEsxi.encrypted,
+      secretIv: encEsxi.iv,
+      secretTag: encEsxi.tag,
       status: 'ONLINE',
       lastSeen: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       pollIntervalSec: 30,
       isEnabled: true,
       isDemo: true,
-      createdAt: new Date(Date.now() - 86400000 * 30).toISOString(),
+      createdAt: new Date(Date.now() - 86400000 * 14).toISOString(),
       updatedAt: new Date().toISOString()
     };
-    this.connections.set(esxiConn1.id, esxiConn1);
+    await this.saveConnection(esxiConn);
 
-    const esxiHost1: ESXiHost = {
-      id: 'host-esxi-01',
-      connectionId: esxiConn1.id,
-      hostname: 'esx-prod-node01.corp.internal',
-      ipAddress: '10.20.0.10',
-      version: 'VMware ESXi 8.0.2',
-      build: 'Releasebuild-22380479',
-      uptimeSeconds: 3849200,
-      cpuModel: 'Intel(R) Xeon(R) Gold 6348 CPU @ 2.60GHz (28 Cores / 56 Threads)',
+    const esxiHost: ESXiHost = {
+      id: 'host-esxi-node-01',
+      connectionId: esxiConn.id,
+      hostname: 'esxi-node01.prod.datacenter.local',
+      ipAddress: '10.240.10.15',
+      version: 'VMware ESXi 8.0 Update 2 (Build 22380479)',
+      build: '22380479',
+      cpuModel: 'Intel(R) Xeon(R) Gold 6348 CPU @ 2.60GHz (2 Sockets x 28 Cores)',
       cpuCores: 56,
       cpuMhzTotal: 145600,
-      cpuUsagePct: 54.2,
-      memoryBytesTotal: 256 * 1024 * 1024 * 1024,
-      memoryUsagePct: 68.4,
-      storageBytesTotal: 14.8 * 1024 * 1024 * 1024 * 1024,
-      storageBytesUsed: 9.6 * 1024 * 1024 * 1024 * 1024,
-      storageUsagePct: 64.8,
+      cpuUsagePct: 52.4,
+      memoryBytesTotal: 274877906944, // 256 GB
+      memoryUsagePct: 68.2,
+      storageBytesTotal: 17592186044416, // 16 TB
+      storageBytesUsed: 10995116277760, // 10 TB
+      storageUsagePct: 62.5,
+      uptimeSeconds: 3888000, // 45 days
       powerState: 'RUNNING',
       vmCount: 6,
       runningVmCount: 5,
       datastores: [
         {
-          id: 'ds-nvme-01',
-          name: 'datastore-nvme-tier1-san',
-          type: 'VMFS-6',
-          capacityBytes: 8 * 1024 * 1024 * 1024 * 1024,
-          freeBytes: 3.2 * 1024 * 1024 * 1024 * 1024,
-          usagePct: 60.0,
+          id: 'ds-nvme-san-01',
+          name: 'SAN-NVMe-Datastore-01',
+          type: 'VMFS 6',
+          capacityBytes: 8796093022208,
+          freeBytes: 3298534883328,
+          usagePct: 62.5,
           status: 'NORMAL'
         },
         {
-          id: 'ds-nfs-01',
-          name: 'datastore-nfs-backup-pool',
-          type: 'NFS-4.1',
-          capacityBytes: 6.8 * 1024 * 1024 * 1024 * 1024,
-          freeBytes: 1.9 * 1024 * 1024 * 1024 * 1024,
-          usagePct: 72.1,
+          id: 'ds-sas-hdd-02',
+          name: 'Archive-SAS-Datastore-02',
+          type: 'VMFS 6',
+          capacityBytes: 8796093022208,
+          freeBytes: 4398046511104,
+          usagePct: 50.0,
           status: 'NORMAL'
         }
       ],
       networks: [
         {
-          id: 'vsw-01',
-          name: 'vSwitch0 (Management & VM Traffic)',
-          type: 'vSwitch',
-          status: 'ACTIVE',
-          rxBytesPerSec: 4820100,
-          txBytesPerSec: 3204900
-        },
-        {
-          id: 'pg-prod-vlan100',
-          name: 'PG-Production-VLAN100',
-          type: 'PortGroup',
+          id: 'net-vm-network',
+          name: 'VM Network (Prod-VLAN-100)',
+          type: 'vSphere Standard Switch (vSwitch0)',
           vlanId: 100,
           status: 'ACTIVE',
-          rxBytesPerSec: 3100200,
-          txBytesPerSec: 2100800
+          rxBytesPerSec: 1845000,
+          txBytesPerSec: 1220000
         },
         {
-          id: 'pg-dmz-vlan200',
-          name: 'PG-DMZ-Edge-VLAN200',
-          type: 'PortGroup',
-          vlanId: 200,
+          id: 'net-dmz-network',
+          name: 'DMZ Public Tier (VLAN-20)',
+          type: 'vSphere Standard Switch (vSwitch1)',
+          vlanId: 20,
           status: 'ACTIVE',
-          rxBytesPerSec: 1719900,
-          txBytesPerSec: 1104100
+          rxBytesPerSec: 450000,
+          txBytesPerSec: 320000
         }
       ]
     };
-    this.esxiHosts.set(esxiHost1.id, esxiHost1);
+    this.esxiHosts.set(esxiHost.id, esxiHost);
 
-    // 2. ESXi Node 2 (Edge/Lab)
-    const esxiConn2: StoredConnection = {
-      id: 'conn-esxi-edge-02',
-      name: 'ESXi Compute Blade Node 02',
-      type: 'ESXI',
-      host: '10.20.0.11',
-      port: 443,
-      useHttps: true,
-      skipSslVerify: true,
-      username: 'root',
-      status: 'ONLINE',
-      lastSeen: new Date().toISOString(),
-      lastCheckedAt: new Date().toISOString(),
-      pollIntervalSec: 30,
-      isEnabled: true,
-      isDemo: true,
-      createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    this.connections.set(esxiConn2.id, esxiConn2);
-
-    const esxiHost2: ESXiHost = {
-      id: 'host-esxi-02',
-      connectionId: esxiConn2.id,
-      hostname: 'esx-edge-blade02.corp.internal',
-      ipAddress: '10.20.0.11',
-      version: 'VMware ESXi 8.0.1',
-      build: 'Releasebuild-21495797',
-      uptimeSeconds: 1948200,
-      cpuModel: 'AMD EPYC 7702P 64-Core Processor',
-      cpuCores: 64,
-      cpuMhzTotal: 128000,
-      cpuUsagePct: 78.9,
-      memoryBytesTotal: 128 * 1024 * 1024 * 1024,
-      memoryUsagePct: 84.1,
-      storageBytesTotal: 8 * 1024 * 1024 * 1024 * 1024,
-      storageBytesUsed: 5.2 * 1024 * 1024 * 1024 * 1024,
-      storageUsagePct: 65.0,
-      powerState: 'RUNNING',
-      vmCount: 4,
-      runningVmCount: 4,
-      datastores: [
-        {
-          id: 'ds-blade2-local',
-          name: 'datastore-nvme-blade02',
-          type: 'VMFS-6',
-          capacityBytes: 8 * 1024 * 1024 * 1024 * 1024,
-          freeBytes: 2.8 * 1024 * 1024 * 1024 * 1024,
-          usagePct: 65.0,
-          status: 'NORMAL'
-        }
-      ],
-      networks: [
-        {
-          id: 'vsw-blade2',
-          name: 'vSwitch0',
-          type: 'vSwitch',
-          status: 'ACTIVE',
-          rxBytesPerSec: 8100300,
-          txBytesPerSec: 6400200
-        }
-      ]
-    };
-    this.esxiHosts.set(esxiHost2.id, esxiHost2);
-
-    // Virtual Machines across ESXi nodes
-    const vms: VirtualMachine[] = [
+    const esxiVMs: VirtualMachine[] = [
       {
-        id: 'vm-prod-db01',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-k8s-master-01',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-101',
-        name: 'prod-postgresql-primary',
+        name: 'k8s-control-plane-01.prod',
         powerState: 'RUNNING',
         cpuCount: 8,
-        cpuUsagePct: 62.4,
-        memoryBytes: 32 * 1024 * 1024 * 1024,
-        memoryUsagePct: 78.5,
-        storageBytes: 500 * 1024 * 1024 * 1024,
-        storageUsagePct: 64.2,
-        ipAddress: '10.20.10.15',
-        guestOs: 'Ubuntu Linux 24.04 LTS (64-bit)',
-        uptimeSeconds: 3412000,
-        datastoreName: 'datastore-nvme-tier1-san',
-        networkName: 'PG-Production-VLAN100',
+        cpuUsagePct: 44.1,
+        memoryBytes: 34359738368, // 32 GB
+        memoryUsagePct: 62.3,
+        storageBytes: 214748364800, // 200 GB
+        storageUsagePct: 48.0,
+        ipAddress: '10.240.10.50',
+        guestOs: 'Ubuntu Linux 22.04 LTS (64-bit)',
+        uptimeSeconds: 3880000,
+        datastoreName: 'SAN-NVMe-Datastore-01',
+        networkName: 'VM Network (Prod-VLAN-100)',
         createdAt: new Date(Date.now() - 86400000 * 45).toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
-        id: 'vm-prod-k8s-cp01',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-k8s-worker-01',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-102',
-        name: 'k8s-controlplane-01',
+        name: 'k8s-worker-node-01.prod',
         powerState: 'RUNNING',
-        cpuCount: 4,
-        cpuUsagePct: 41.8,
-        memoryBytes: 16 * 1024 * 1024 * 1024,
-        memoryUsagePct: 61.2,
-        storageBytes: 120 * 1024 * 1024 * 1024,
-        storageUsagePct: 38.0,
-        ipAddress: '10.20.10.20',
-        guestOs: 'Debian GNU/Linux 12 (bookworm)',
-        uptimeSeconds: 2190000,
-        datastoreName: 'datastore-nvme-tier1-san',
-        networkName: 'PG-Production-VLAN100',
-        createdAt: new Date(Date.now() - 86400000 * 30).toISOString(),
+        cpuCount: 16,
+        cpuUsagePct: 78.4,
+        memoryBytes: 68719476736, // 64 GB
+        memoryUsagePct: 81.5,
+        storageBytes: 536870912000, // 500 GB
+        storageUsagePct: 72.1,
+        ipAddress: '10.240.10.51',
+        guestOs: 'Ubuntu Linux 22.04 LTS (64-bit)',
+        uptimeSeconds: 3880000,
+        datastoreName: 'SAN-NVMe-Datastore-01',
+        networkName: 'VM Network (Prod-VLAN-100)',
+        createdAt: new Date(Date.now() - 86400000 * 45).toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
-        id: 'vm-prod-redis01',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-pg-cluster-primary',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-103',
-        name: 'prod-redis-sentinel-01',
+        name: 'postgres-ha-primary-01',
         powerState: 'RUNNING',
-        cpuCount: 4,
-        cpuUsagePct: 24.1,
-        memoryBytes: 16 * 1024 * 1024 * 1024,
-        memoryUsagePct: 52.0,
-        storageBytes: 60 * 1024 * 1024 * 1024,
-        storageUsagePct: 29.5,
-        ipAddress: '10.20.10.35',
-        guestOs: 'Alpine Linux v3.19',
-        uptimeSeconds: 1849000,
-        datastoreName: 'datastore-nvme-tier1-san',
-        networkName: 'PG-Production-VLAN100',
-        createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
+        cpuCount: 12,
+        cpuUsagePct: 56.2,
+        memoryBytes: 42949672960, // 40 GB
+        memoryUsagePct: 74.0,
+        storageBytes: 1073741824000, // 1 TB
+        storageUsagePct: 68.4,
+        ipAddress: '10.240.10.60',
+        guestOs: 'Debian GNU/Linux 12 (bookworm)',
+        uptimeSeconds: 3880000,
+        datastoreName: 'SAN-NVMe-Datastore-01',
+        networkName: 'VM Network (Prod-VLAN-100)',
+        createdAt: new Date(Date.now() - 86400000 * 45).toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
-        id: 'vm-prod-edge-waf',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-vault-security',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-104',
-        name: 'edge-waf-envoy-proxy',
+        name: 'hashicorp-vault-kms-01',
         powerState: 'RUNNING',
         cpuCount: 4,
-        cpuUsagePct: 48.7,
-        memoryBytes: 8 * 1024 * 1024 * 1024,
-        memoryUsagePct: 44.0,
-        storageBytes: 80 * 1024 * 1024 * 1024,
-        storageUsagePct: 35.1,
-        ipAddress: '10.20.20.5',
-        guestOs: 'Rocky Linux 9.3 (Blue Onyx)',
-        uptimeSeconds: 3100000,
-        datastoreName: 'datastore-nvme-tier1-san',
-        networkName: 'PG-DMZ-Edge-VLAN200',
-        createdAt: new Date(Date.now() - 86400000 * 50).toISOString(),
+        cpuUsagePct: 18.5,
+        memoryBytes: 17179869184, // 16 GB
+        memoryUsagePct: 32.1,
+        storageBytes: 107374182400, // 100 GB
+        storageUsagePct: 22.0,
+        ipAddress: '10.240.10.70',
+        guestOs: 'Alpine Linux v3.19',
+        uptimeSeconds: 3880000,
+        datastoreName: 'SAN-NVMe-Datastore-01',
+        networkName: 'VM Network (Prod-VLAN-100)',
+        createdAt: new Date(Date.now() - 86400000 * 45).toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
-        id: 'vm-prod-win-ad',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-backup-veeam',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-105',
-        name: 'win-activedirectory-dc01',
+        name: 'veeam-dr-backup-proxy',
         powerState: 'RUNNING',
-        cpuCount: 4,
-        cpuUsagePct: 32.5,
-        memoryBytes: 16 * 1024 * 1024 * 1024,
-        memoryUsagePct: 58.9,
-        storageBytes: 150 * 1024 * 1024 * 1024,
-        storageUsagePct: 51.4,
-        ipAddress: '10.20.10.8',
-        guestOs: 'Microsoft Windows Server 2022 (64-bit)',
-        uptimeSeconds: 1540000,
-        datastoreName: 'datastore-nvme-tier1-san',
-        networkName: 'PG-Production-VLAN100',
-        createdAt: new Date(Date.now() - 86400000 * 60).toISOString(),
+        cpuCount: 8,
+        cpuUsagePct: 29.8,
+        memoryBytes: 34359738368,
+        memoryUsagePct: 41.2,
+        storageBytes: 2147483648000,
+        storageUsagePct: 84.5,
+        ipAddress: '10.240.10.80',
+        guestOs: 'Microsoft Windows Server 2022 Datacenter',
+        uptimeSeconds: 2160000,
+        datastoreName: 'Archive-SAS-Datastore-02',
+        networkName: 'VM Network (Prod-VLAN-100)',
+        createdAt: new Date(Date.now() - 86400000 * 25).toISOString(),
         updatedAt: new Date().toISOString()
       },
       {
-        id: 'vm-stage-staging01',
-        connectionId: esxiConn1.id,
-        hostId: esxiHost1.id,
+        id: 'vm-staging-sandbox',
+        connectionId: esxiConn.id,
+        hostId: esxiHost.id,
         externalVmId: 'vm-106',
-        name: 'stage-app-monolith-dr',
+        name: 'staging-qa-sandbox-env',
         powerState: 'STOPPED',
         cpuCount: 4,
         cpuUsagePct: 0,
-        memoryBytes: 16 * 1024 * 1024 * 1024,
+        memoryBytes: 17179869184,
         memoryUsagePct: 0,
-        storageBytes: 100 * 1024 * 1024 * 1024,
-        storageUsagePct: 42.0,
-        ipAddress: '10.20.10.99',
+        storageBytes: 214748364800,
+        storageUsagePct: 35.0,
+        ipAddress: '10.240.10.99',
         guestOs: 'Ubuntu Linux 22.04 LTS (64-bit)',
         uptimeSeconds: 0,
-        datastoreName: 'datastore-nfs-backup-pool',
-        networkName: 'PG-Production-VLAN100',
-        createdAt: new Date(Date.now() - 86400000 * 15).toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      // Node 2 VMs
-      {
-        id: 'vm-k8s-worker01',
-        connectionId: esxiConn2.id,
-        hostId: esxiHost2.id,
-        externalVmId: 'vm-201',
-        name: 'k8s-compute-worker-01',
-        powerState: 'RUNNING',
-        cpuCount: 16,
-        cpuUsagePct: 88.5,
-        memoryBytes: 64 * 1024 * 1024 * 1024,
-        memoryUsagePct: 91.4,
-        storageBytes: 400 * 1024 * 1024 * 1024,
-        storageUsagePct: 76.8,
-        ipAddress: '10.20.10.21',
-        guestOs: 'Debian GNU/Linux 12 (bookworm)',
-        uptimeSeconds: 1940000,
-        datastoreName: 'datastore-nvme-blade02',
-        networkName: 'vSwitch0',
-        createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: 'vm-k8s-worker02',
-        connectionId: esxiConn2.id,
-        hostId: esxiHost2.id,
-        externalVmId: 'vm-202',
-        name: 'k8s-compute-worker-02',
-        powerState: 'RUNNING',
-        cpuCount: 16,
-        cpuUsagePct: 74.2,
-        memoryBytes: 32 * 1024 * 1024 * 1024,
-        memoryUsagePct: 79.0,
-        storageBytes: 300 * 1024 * 1024 * 1024,
-        storageUsagePct: 61.2,
-        ipAddress: '10.20.10.22',
-        guestOs: 'Debian GNU/Linux 12 (bookworm)',
-        uptimeSeconds: 1940000,
-        datastoreName: 'datastore-nvme-blade02',
-        networkName: 'vSwitch0',
-        createdAt: new Date(Date.now() - 86400000 * 20).toISOString(),
+        datastoreName: 'SAN-NVMe-Datastore-01',
+        networkName: 'VM Network (Prod-VLAN-100)',
+        createdAt: new Date(Date.now() - 86400000 * 45).toISOString(),
         updatedAt: new Date().toISOString()
       }
     ];
-    vms.forEach(vm => this.virtualMachines.set(vm.id, vm));
+    esxiVMs.forEach(vm => this.virtualMachines.set(vm.id, vm));
 
-    // 3. CasaOS Homelab / Edge Server 1
-    const casaConn1: StoredConnection = {
+    // 2. CasaOS Server & Apps
+    const casaConn: StoredConnection = {
       id: 'conn-casaos-edge-01',
-      name: 'CasaOS Edge Media & Storage Server',
+      name: 'CasaOS Edge Gateway (HomeLab & Media)',
       type: 'CASAOS',
-      host: '10.30.0.50',
+      host: '10.240.20.5',
       port: 80,
       useHttps: false,
       skipSslVerify: false,
-      username: 'casaos-admin',
+      username: 'admin',
+      encryptedSecret: encCasa.encrypted,
+      secretIv: encCasa.iv,
+      secretTag: encCasa.tag,
       status: 'ONLINE',
       lastSeen: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       pollIntervalSec: 30,
       isEnabled: true,
       isDemo: true,
-      createdAt: new Date(Date.now() - 86400000 * 40).toISOString(),
+      createdAt: new Date(Date.now() - 86400000 * 10).toISOString(),
       updatedAt: new Date().toISOString()
     };
-    this.connections.set(casaConn1.id, casaConn1);
+    await this.saveConnection(casaConn);
 
-    const casaServer1: CasaOSServer = {
-      id: 'casa-srv-01',
-      connectionId: casaConn1.id,
-      hostname: 'casaos-storage-edge.local',
-      ipAddress: '10.30.0.50',
-      version: 'CasaOS v0.4.8 (ZimaBoard/Debian 12)',
-      uptimeSeconds: 1420500,
-      cpuModel: 'Intel Celeron N5105 @ 2.00GHz (4 Cores / 4 Threads)',
-      cpuCores: 4,
+    const casaServer: CasaOSServer = {
+      id: 'srv-casaos-node-01',
+      connectionId: casaConn.id,
+      hostname: 'casaos-edge-appliance.local',
+      ipAddress: '10.240.20.5',
+      version: 'v0.4.8 Community Edition',
+      uptimeSeconds: 1555200,
+      cpuModel: 'Intel(R) Core(TM) i7-12700H @ 2.30GHz (14 Cores / 20 Threads)',
+      cpuCores: 14,
       cpuUsagePct: 38.6,
-      memoryBytesTotal: 16 * 1024 * 1024 * 1024,
-      memoryBytesUsed: 9.4 * 1024 * 1024 * 1024,
-      memoryUsagePct: 58.7,
-      storageBytesTotal: 18 * 1024 * 1024 * 1024 * 1024,
-      storageBytesUsed: 11.2 * 1024 * 1024 * 1024 * 1024,
-      storageUsagePct: 62.2,
-      diskCount: 3,
+      memoryBytesTotal: 68719476736,
+      memoryBytesUsed: 36507222016,
+      memoryUsagePct: 53.1,
+      storageBytesTotal: 8796093022208,
+      storageBytesUsed: 5277655813324,
+      storageUsagePct: 60.0,
+      diskCount: 4,
       runningAppsCount: 6,
       totalAppsCount: 7,
-      dockerVersion: '26.0.1-ce',
+      dockerVersion: 'Docker Engine v25.0.3 (build 4debf41)',
       disks: [
         {
-          id: 'disk-sata-01',
-          name: 'Samsung SSD 870 EVO 1TB',
-          path: '/dev/sda',
-          model: 'MZ-77E1T0B',
-          capacityBytes: 1000 * 1024 * 1024 * 1024,
-          usedBytes: 420 * 1024 * 1024 * 1024,
-          usagePct: 42.0,
+          id: 'disk-nvme-sys',
+          name: 'Samsung NVMe SSD 980 PRO 2TB',
+          path: '/',
+          model: 'Samsung 980 PRO',
+          capacityBytes: 2000398934016,
+          usedBytes: 800159573606,
+          usagePct: 40.0,
           health: 'PASSED',
-          temperatureC: 34,
-          type: 'SSD'
+          temperatureC: 41,
+          type: 'NVMe'
         },
         {
-          id: 'disk-nas-02',
-          name: 'Seagate IronWolf Pro 8TB',
-          path: '/dev/sdb',
-          model: 'ST8000NE001',
-          capacityBytes: 8000 * 1024 * 1024 * 1024,
-          usedBytes: 5800 * 1024 * 1024 * 1024,
-          usagePct: 72.5,
+          id: 'disk-hdd-array-01',
+          name: 'Seagate IronWolf Pro 8TB NAS (ZFS Pool)',
+          path: '/DATA/MediaPool',
+          model: 'Seagate IronWolf Pro',
+          capacityBytes: 8001563222016,
+          usedBytes: 4800937933209,
+          usagePct: 60.0,
           health: 'PASSED',
-          temperatureC: 38,
-          type: 'HDD'
-        },
-        {
-          id: 'disk-nas-03',
-          name: 'Seagate IronWolf Pro 8TB (Mirror Pool)',
-          path: '/dev/sdc',
-          model: 'ST8000NE001',
-          capacityBytes: 8000 * 1024 * 1024 * 1024,
-          usedBytes: 5800 * 1024 * 1024 * 1024,
-          usagePct: 72.5,
-          health: 'PASSED',
-          temperatureC: 39,
+          temperatureC: 36,
           type: 'HDD'
         }
       ]
     };
-    this.casaosServers.set(casaServer1.id, casaServer1);
+    this.casaosServers.set(casaServer.id, casaServer);
 
-    // CasaOS Apps
     const casaApps: CasaOSApp[] = [
       {
-        id: 'app-plex',
-        connectionId: casaConn1.id,
-        name: 'plex',
-        title: 'Plex Media Server',
-        category: 'Media & Entertainment',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/plex.png',
+        id: 'app-nextcloud',
+        connectionId: casaConn.id,
+        name: 'nextcloud',
+        title: 'Nextcloud Hub 28 Enterprise',
+        category: 'Productivity & Storage',
+        icon: 'cloud',
         status: 'running',
-        containerId: 'c-plex-882a9f',
-        image: 'linuxserver/plex:latest',
-        cpuUsagePct: 18.4,
-        memoryBytes: 2.4 * 1024 * 1024 * 1024,
-        memoryUsagePct: 15.0,
-        networkRxBytes: 1540920000,
-        networkTxBytes: 8930400000,
+        containerId: 'cntr-nc-28',
+        image: 'nextcloud:28.0.2-apache',
+        cpuUsagePct: 8.4,
+        memoryBytes: 2147483648,
+        memoryUsagePct: 3.1,
+        networkRxBytes: 4294967296,
+        networkTxBytes: 3221225472,
         restartCount: 0,
-        ports: [{ host: 32400, container: 32400, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/Media', containerPath: '/media', mode: 'ro' },
-          { hostPath: '/DATA/AppData/plex', containerPath: '/config', mode: 'rw' }
-        ],
-        uptimeSeconds: 984000,
-        createdAt: new Date(Date.now() - 86400000 * 30).toISOString()
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+        volumes: [{ hostPath: '/DATA/AppData/nextcloud', containerPath: '/var/www/html', mode: 'rw' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
-        id: 'app-nextcloud',
-        connectionId: casaConn1.id,
-        name: 'nextcloud',
-        title: 'Nextcloud Hub',
-        category: 'Cloud Storage & Office',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/nextcloud.png',
+        id: 'app-jellyfin',
+        connectionId: casaConn.id,
+        name: 'jellyfin',
+        title: 'Jellyfin Media Server (Hardware Transcoding)',
+        category: 'Media & Streaming',
+        icon: 'film',
         status: 'running',
-        containerId: 'c-nextcloud-55b21',
-        image: 'nextcloud:apache',
-        cpuUsagePct: 8.2,
-        memoryBytes: 1.1 * 1024 * 1024 * 1024,
-        memoryUsagePct: 6.8,
-        networkRxBytes: 420900000,
-        networkTxBytes: 310800000,
-        restartCount: 1,
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/AppData/nextcloud', containerPath: '/var/www/html', mode: 'rw' }
-        ],
-        uptimeSeconds: 849000,
-        createdAt: new Date(Date.now() - 86400000 * 25).toISOString()
+        containerId: 'cntr-jf-10',
+        image: 'jellyfin/jellyfin:10.8.13-1',
+        cpuUsagePct: 19.2,
+        memoryBytes: 4294967296,
+        memoryUsagePct: 6.2,
+        networkRxBytes: 12884901888,
+        networkTxBytes: 64424509440,
+        restartCount: 0,
+        ports: [{ host: 8096, container: 8096, protocol: 'tcp' }],
+        volumes: [{ hostPath: '/DATA/MediaPool', containerPath: '/media', mode: 'ro' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
         id: 'app-homeassistant',
-        connectionId: casaConn1.id,
+        connectionId: casaConn.id,
         name: 'homeassistant',
-        title: 'Home Assistant Core',
-        category: 'Home Automation & IoT',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/home-assistant.png',
+        title: 'Home Assistant Core 2024.3',
+        category: 'Smart Home & IoT',
+        icon: 'home',
         status: 'running',
-        containerId: 'c-ha-3381a',
-        image: 'ghcr.io/home-assistant/home-assistant:stable',
-        cpuUsagePct: 4.5,
-        memoryBytes: 850 * 1024 * 1024,
-        memoryUsagePct: 5.3,
-        networkRxBytes: 89000000,
-        networkTxBytes: 74000000,
+        containerId: 'cntr-ha-2024',
+        image: 'homeassistant/home-assistant:2024.3.1',
+        cpuUsagePct: 4.1,
+        memoryBytes: 1610612736,
+        memoryUsagePct: 2.3,
+        networkRxBytes: 2147483648,
+        networkTxBytes: 1073741824,
         restartCount: 0,
         ports: [{ host: 8123, container: 8123, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/AppData/homeassistant', containerPath: '/config', mode: 'rw' }
-        ],
-        uptimeSeconds: 1420000,
-        createdAt: new Date(Date.now() - 86400000 * 40).toISOString()
+        volumes: [{ hostPath: '/DATA/AppData/homeassistant', containerPath: '/config', mode: 'rw' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
-        id: 'app-pihole',
-        connectionId: casaConn1.id,
-        name: 'pihole',
-        title: 'Pi-hole DNS Sinkhole',
-        category: 'Networking & Security',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/pi-hole.png',
+        id: 'app-adguard-home',
+        connectionId: casaConn.id,
+        name: 'adguard-home',
+        title: 'AdGuard Home DNS / DoH Filter',
+        category: 'Network & Security',
+        icon: 'shield',
         status: 'running',
-        containerId: 'c-pihole-991f',
-        image: 'pihole/pihole:latest',
-        cpuUsagePct: 1.2,
-        memoryBytes: 320 * 1024 * 1024,
-        memoryUsagePct: 2.0,
-        networkRxBytes: 48900000,
-        networkTxBytes: 52000000,
+        containerId: 'cntr-agh-01',
+        image: 'adguard/adguardhome:v0.107.45',
+        cpuUsagePct: 2.0,
+        memoryBytes: 536870912,
+        memoryUsagePct: 0.8,
+        networkRxBytes: 8589934592,
+        networkTxBytes: 8589934592,
         restartCount: 0,
-        ports: [
-          { host: 53, container: 53, protocol: 'udp' },
-          { host: 8053, container: 80, protocol: 'tcp' }
-        ],
-        volumes: [
-          { hostPath: '/DATA/AppData/pihole/etc-pihole', containerPath: '/etc/pihole', mode: 'rw' }
-        ],
-        uptimeSeconds: 1420000,
-        createdAt: new Date(Date.now() - 86400000 * 40).toISOString()
+        ports: [{ host: 3001, container: 3000, protocol: 'tcp' }],
+        volumes: [{ hostPath: '/DATA/AppData/adguard/conf', containerPath: '/opt/adguardhome/conf', mode: 'rw' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
         id: 'app-vaultwarden',
-        connectionId: casaConn1.id,
+        connectionId: casaConn.id,
         name: 'vaultwarden',
-        title: 'Vaultwarden Password Vault',
-        category: 'Security & Auth',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/bitwarden.png',
+        title: 'Vaultwarden Bitwarden Server',
+        category: 'Security & Passwords',
+        icon: 'lock',
         status: 'running',
-        containerId: 'c-vw-7729b',
-        image: 'vaultwarden/server:latest',
-        cpuUsagePct: 0.8,
-        memoryBytes: 180 * 1024 * 1024,
-        memoryUsagePct: 1.1,
-        networkRxBytes: 12000000,
-        networkTxBytes: 15000000,
+        containerId: 'cntr-vw-130',
+        image: 'vaultwarden/server:1.30.5',
+        cpuUsagePct: 1.5,
+        memoryBytes: 402653184,
+        memoryUsagePct: 0.6,
+        networkRxBytes: 1073741824,
+        networkTxBytes: 1073741824,
         restartCount: 0,
         ports: [{ host: 8088, container: 80, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/AppData/vaultwarden', containerPath: '/data', mode: 'rw' }
-        ],
-        uptimeSeconds: 1420000,
-        createdAt: new Date(Date.now() - 86400000 * 35).toISOString()
+        volumes: [{ hostPath: '/DATA/AppData/vaultwarden', containerPath: '/data', mode: 'rw' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
-        id: 'app-grafana',
-        connectionId: casaConn1.id,
-        name: 'grafana',
-        title: 'Grafana Telemetry & Logs',
-        category: 'Monitoring & Analytics',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/grafana.png',
+        id: 'app-photoprism',
+        connectionId: casaConn.id,
+        name: 'photoprism',
+        title: 'PhotoPrism AI Powered Gallery',
+        category: 'Media & Photography',
+        icon: 'camera',
         status: 'running',
-        containerId: 'c-grafana-12a88',
-        image: 'grafana/grafana:latest',
-        cpuUsagePct: 3.1,
-        memoryBytes: 420 * 1024 * 1024,
-        memoryUsagePct: 2.6,
-        networkRxBytes: 78000000,
-        networkTxBytes: 85000000,
+        containerId: 'cntr-pp-24',
+        image: 'photoprism/photoprism:240301-jammy',
+        cpuUsagePct: 12.8,
+        memoryBytes: 3221225472,
+        memoryUsagePct: 4.7,
+        networkRxBytes: 6442450944,
+        networkTxBytes: 4294967296,
         restartCount: 0,
-        ports: [{ host: 3001, container: 3000, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/AppData/grafana', containerPath: '/var/lib/grafana', mode: 'rw' }
-        ],
-        uptimeSeconds: 1200000,
-        createdAt: new Date(Date.now() - 86400000 * 28).toISOString()
+        ports: [{ host: 2342, container: 2342, protocol: 'tcp' }],
+        volumes: [{ hostPath: '/DATA/MediaPool/Photos', containerPath: '/photoprism/originals', mode: 'rw' }],
+        uptimeSeconds: 1555200,
+        createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       },
       {
-        id: 'app-qbittorrent',
-        connectionId: casaConn1.id,
-        name: 'qbittorrent',
-        title: 'qBittorrent Web UI',
-        category: 'Downloaders',
-        icon: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/qbittorrent.png',
+        id: 'app-transmission-vpn',
+        connectionId: casaConn.id,
+        name: 'transmission-vpn',
+        title: 'Transmission Torrent + WireGuard VPN',
+        category: 'Download & Networking',
+        icon: 'download',
         status: 'stopped',
-        containerId: 'c-qbit-4491c',
-        image: 'linuxserver/qbittorrent:latest',
+        containerId: 'cntr-trans-01',
+        image: 'haugene/transmission-openvpn:latest',
         cpuUsagePct: 0,
         memoryBytes: 0,
         memoryUsagePct: 0,
         networkRxBytes: 0,
         networkTxBytes: 0,
-        restartCount: 2,
-        ports: [{ host: 8085, container: 8080, protocol: 'tcp' }],
-        volumes: [
-          { hostPath: '/DATA/Downloads', containerPath: '/downloads', mode: 'rw' }
-        ],
+        restartCount: 0,
+        ports: [{ host: 9091, container: 9091, protocol: 'tcp' }],
+        volumes: [{ hostPath: '/DATA/MediaPool/Downloads', containerPath: '/data', mode: 'rw' }],
         uptimeSeconds: 0,
         createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
       }
     ];
-    casaApps.forEach(app => this.casaosApps.set(app.id, app));
+    casaApps.forEach(a => this.casaosApps.set(a.id, a));
 
-    // 4. Standalone Docker Host Connection
-    const dockerConn1: StoredConnection = {
-      id: 'conn-docker-cicd-01',
-      name: 'Docker CI/CD & Build Runner',
+    // 3. Docker Production Node
+    const dockerConn: StoredConnection = {
+      id: 'conn-docker-prod-01',
+      name: 'Docker Production Microservices Host',
       type: 'DOCKER',
-      host: '10.20.10.80',
-      port: 2375,
-      useHttps: false,
-      skipSslVerify: false,
+      host: '10.240.30.12',
+      port: 2376,
+      useHttps: true,
+      skipSslVerify: true,
+      encryptedSecret: encDocker.encrypted,
+      secretIv: encDocker.iv,
+      secretTag: encDocker.tag,
       status: 'ONLINE',
       lastSeen: new Date().toISOString(),
       lastCheckedAt: new Date().toISOString(),
       pollIntervalSec: 30,
       isEnabled: true,
       isDemo: true,
-      createdAt: new Date(Date.now() - 86400000 * 15).toISOString(),
+      createdAt: new Date(Date.now() - 86400000 * 7).toISOString(),
       updatedAt: new Date().toISOString()
     };
-    this.connections.set(dockerConn1.id, dockerConn1);
+    await this.saveConnection(dockerConn);
 
     const dockerContainers: DockerContainer[] = [
       {
-        id: 'docker-gitlab-runner',
-        connectionId: dockerConn1.id,
-        containerId: '7f91a2bc3d4e',
-        name: 'gitlab-runner-heavy-builds',
-        image: 'gitlab/gitlab-runner:ubuntu-v16.10.0',
-        status: 'Up 14 days',
+        id: 'cntr-ingress-traefik',
+        connectionId: dockerConn.id,
+        containerId: 'e92f1837b01c',
+        name: 'traefik-edge-reverse-proxy',
+        image: 'traefik:v3.0.0-rc4',
         state: 'running',
-        cpuUsagePct: 35.8,
-        memoryBytes: 3.8 * 1024 * 1024 * 1024,
-        memoryLimitBytes: 16 * 1024 * 1024 * 1024,
-        memoryUsagePct: 23.7,
-        networkRxBytes: 894000000,
-        networkTxBytes: 742000000,
-        ports: [],
-        mounts: [{ source: '/var/run/docker.sock', destination: '/var/run/docker.sock', mode: 'rw', rw: true }],
-        restartCount: 0,
-        created: new Date(Date.now() - 86400000 * 14).toISOString()
-      },
-      {
-        id: 'docker-redis-cache',
-        connectionId: dockerConn1.id,
-        containerId: '98a12e4f01bb',
-        name: 'build-artifact-redis-cache',
-        image: 'redis:7.2-alpine',
-        status: 'Up 14 days',
-        state: 'running',
-        cpuUsagePct: 2.1,
-        memoryBytes: 512 * 1024 * 1024,
-        memoryLimitBytes: 4 * 1024 * 1024 * 1024,
-        memoryUsagePct: 12.8,
-        networkRxBytes: 124000000,
-        networkTxBytes: 382000000,
-        ports: [{ privatePort: 6379, publicPort: 6379, type: 'tcp' }],
-        mounts: [{ source: 'redis-cache-vol', destination: '/data', mode: 'rw', rw: true }],
-        restartCount: 0,
-        created: new Date(Date.now() - 86400000 * 14).toISOString()
-      },
-      {
-        id: 'docker-registry-mirror',
-        connectionId: dockerConn1.id,
-        containerId: 'e2c19a88f01a',
-        name: 'local-container-registry-mirror',
-        image: 'registry:2',
-        status: 'Up 12 days',
-        state: 'running',
-        cpuUsagePct: 1.4,
-        memoryBytes: 380 * 1024 * 1024,
-        memoryLimitBytes: 2 * 1024 * 1024 * 1024,
-        memoryUsagePct: 19.0,
-        networkRxBytes: 2400000000,
-        networkTxBytes: 1800000000,
-        ports: [{ privatePort: 5000, publicPort: 5000, type: 'tcp' }],
-        mounts: [{ source: '/opt/registry', destination: '/var/lib/registry', mode: 'rw', rw: true }],
+        status: 'Up 12 days (healthy)',
+        cpuUsagePct: 3.2,
+        memoryBytes: 167772160,
+        memoryLimitBytes: 1073741824,
+        memoryUsagePct: 15.6,
+        networkTxBytes: 85899345920,
+        networkRxBytes: 128849018880,
+        ports: [
+          { privatePort: 80, publicPort: 80, type: 'tcp', ip: '0.0.0.0' },
+          { privatePort: 443, publicPort: 443, type: 'tcp', ip: '0.0.0.0' },
+          { privatePort: 8080, publicPort: 8080, type: 'tcp', ip: '127.0.0.1' }
+        ],
+        mounts: [
+          { source: '/var/run/docker.sock', destination: '/var/run/docker.sock', mode: 'ro', rw: false },
+          { source: '/etc/traefik/acme.json', destination: '/acme.json', mode: 'rw', rw: true }
+        ],
         restartCount: 0,
         created: new Date(Date.now() - 86400000 * 12).toISOString()
+      },
+      {
+        id: 'cntr-redis-cluster',
+        connectionId: dockerConn.id,
+        containerId: '8a11b439c72e',
+        name: 'redis-cache-cluster-master',
+        image: 'redis:7.2.4-alpine',
+        state: 'running',
+        status: 'Up 12 days',
+        cpuUsagePct: 6.8,
+        memoryBytes: 4294967296,
+        memoryLimitBytes: 8589934592,
+        memoryUsagePct: 50.0,
+        networkTxBytes: 42949672960,
+        networkRxBytes: 34359738368,
+        ports: [{ privatePort: 6379, publicPort: 6379, type: 'tcp', ip: '0.0.0.0' }],
+        mounts: [{ source: '/var/lib/redis/data', destination: '/data', mode: 'rw', rw: true }],
+        restartCount: 0,
+        created: new Date(Date.now() - 86400000 * 12).toISOString()
+      },
+      {
+        id: 'cntr-grafana-oss',
+        connectionId: dockerConn.id,
+        containerId: '3c8290f1d41a',
+        name: 'grafana-observability-dashboard',
+        image: 'grafana/grafana-enterprise:10.4.0',
+        state: 'running',
+        status: 'Up 9 days',
+        cpuUsagePct: 4.5,
+        memoryBytes: 536870912,
+        memoryLimitBytes: 2147483648,
+        memoryUsagePct: 25.0,
+        networkTxBytes: 12884901888,
+        networkRxBytes: 8589934592,
+        ports: [{ privatePort: 3000, publicPort: 3000, type: 'tcp', ip: '0.0.0.0' }],
+        mounts: [{ source: '/var/lib/grafana', destination: '/var/lib/grafana', mode: 'rw', rw: true }],
+        restartCount: 0,
+        created: new Date(Date.now() - 86400000 * 9).toISOString()
+      },
+      {
+        id: 'cntr-prometheus-tsdb',
+        connectionId: dockerConn.id,
+        containerId: '77b819f032aa',
+        name: 'prometheus-time-series-metrics',
+        image: 'prom/prometheus:v2.50.1',
+        state: 'running',
+        status: 'Up 9 days',
+        cpuUsagePct: 14.2,
+        memoryBytes: 6442450944,
+        memoryLimitBytes: 12884901888,
+        memoryUsagePct: 50.0,
+        networkTxBytes: 8589934592,
+        networkRxBytes: 68719476736,
+        ports: [{ privatePort: 9090, publicPort: 9090, type: 'tcp', ip: '127.0.0.1' }],
+        mounts: [{ source: '/prometheus/data', destination: '/prometheus', mode: 'rw', rw: true }],
+        restartCount: 0,
+        created: new Date(Date.now() - 86400000 * 9).toISOString()
+      },
+      {
+        id: 'cntr-rabbitmq-broker',
+        connectionId: dockerConn.id,
+        containerId: '98d24ef0981b',
+        name: 'rabbitmq-event-bus-cluster',
+        image: 'rabbitmq:3.13-management-alpine',
+        state: 'running',
+        status: 'Up 6 days',
+        cpuUsagePct: 5.1,
+        memoryBytes: 1073741824,
+        memoryLimitBytes: 4294967296,
+        memoryUsagePct: 25.0,
+        networkTxBytes: 25769803776,
+        networkRxBytes: 21474836480,
+        ports: [
+          { privatePort: 5672, publicPort: 5672, type: 'tcp', ip: '0.0.0.0' },
+          { privatePort: 15672, publicPort: 15672, type: 'tcp', ip: '0.0.0.0' }
+        ],
+        mounts: [{ source: '/var/lib/rabbitmq', destination: '/var/lib/rabbitmq', mode: 'rw', rw: true }],
+        restartCount: 0,
+        created: new Date(Date.now() - 86400000 * 6).toISOString()
+      },
+      {
+        id: 'cntr-worker-batch-etl',
+        connectionId: dockerConn.id,
+        containerId: '54e908ab1c3d',
+        name: 'etl-pipeline-batch-consumer',
+        image: 'python:3.11-slim',
+        state: 'exited',
+        status: 'Exited (0) 4 hours ago',
+        cpuUsagePct: 0,
+        memoryBytes: 0,
+        memoryLimitBytes: 2147483648,
+        memoryUsagePct: 0,
+        networkTxBytes: 2147483648,
+        networkRxBytes: 10737418240,
+        ports: [],
+        mounts: [{ source: '/tmp/etl-jobs', destination: '/jobs', mode: 'rw', rw: true }],
+        restartCount: 1,
+        created: new Date(Date.now() - 86400000 * 3).toISOString()
       }
     ];
     dockerContainers.forEach(c => this.dockerContainers.set(c.id, c));
 
-    // Seed historical time series metrics (last 24 hours in 30 minute chunks)
-    this.metrics = [];
-    const now = Date.now();
-    for (let i = 48; i >= 0; i--) {
-      const ts = new Date(now - i * 30 * 60 * 1000).toISOString();
-      const wave = Math.sin((48 - i) / 4);
-      this.metrics.push({
-        timestamp: ts,
-        cpu: Math.min(95, Math.max(25, Math.round(52 + wave * 18 + (Math.random() * 8 - 4)))),
-        memory: Math.min(92, Math.max(45, Math.round(68 + wave * 10 + (Math.random() * 4 - 2)))),
-        storage: Math.round(64.2 + (48 - i) * 0.04),
-        networkRxKbps: Math.round(18400 + wave * 6500 + Math.random() * 2000),
-        networkTxKbps: Math.round(14200 + wave * 5200 + Math.random() * 1500)
-      });
-    }
-
-    // Seed active Alerts
-    const sampleAlerts: Alert[] = [
+    // 4. Initial Active Alerts
+    const initialAlerts: Alert[] = [
       {
-        id: 'alert-001',
-        connectionId: esxiConn2.id,
-        title: 'Compute Node High Memory Consumption',
-        message: 'Host esx-edge-blade02.corp.internal memory threshold exceeded (84.1% allocated). Worker-01 node pressure.',
+        id: 'alt-k8s-worker-load',
+        connectionId: esxiConn.id,
+        title: 'High CPU Load on k8s-worker-node-01',
+        message: 'CPU consumption exceeded 75% threshold for > 2 minutes (Observed: 78.4%)',
         severity: 'WARNING',
         status: 'ACTIVE',
-        source: 'ESXi Host Monitor',
-        resourceType: 'ESXI',
-        resourceId: esxiHost2.id,
-        valueObserved: 84.1,
-        threshold: 80.0,
-        createdAt: new Date(Date.now() - 28 * 60 * 1000).toISOString(),
-        updatedAt: new Date(Date.now() - 28 * 60 * 1000).toISOString()
+        source: 'k8s-worker-node-01.prod',
+        resourceType: 'VM',
+        resourceId: 'vm-k8s-worker-01',
+        valueObserved: 78.4,
+        threshold: 75.0,
+        createdAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
+        updatedAt: new Date().toISOString()
       },
       {
-        id: 'alert-002',
-        connectionId: esxiConn2.id,
-        title: 'Kubernetes Worker CPU Saturation',
-        message: 'VM k8s-compute-worker-01 CPU usage sustained at 88.5% for > 5 minutes.',
+        id: 'alt-backup-storage-capacity',
+        connectionId: esxiConn.id,
+        title: 'Veeam DR Proxy Storage Near Threshold',
+        message: 'Assigned virtual disk utilization is at 84.5% (Threshold: 85.0%)',
         severity: 'WARNING',
         status: 'ACTIVE',
-        source: 'VM Telemetry',
-        resourceType: 'VM',
-        resourceId: 'vm-k8s-worker01',
-        valueObserved: 88.5,
+        source: 'veeam-dr-backup-proxy',
+        resourceType: 'STORAGE',
+        resourceId: 'vm-backup-veeam',
+        valueObserved: 84.5,
         threshold: 85.0,
-        createdAt: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
-        updatedAt: new Date(Date.now() - 14 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'alert-003',
-        connectionId: casaConn1.id,
-        title: 'Application Container Stopped: qBittorrent',
-        message: 'Application qBittorrent Web UI exited with code 0. Status is currently stopped.',
-        severity: 'INFO',
-        status: 'ACKNOWLEDGED',
-        source: 'CasaOS Engine',
-        resourceType: 'CASAOS',
-        resourceId: 'app-qbittorrent',
-        acknowledgedAt: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
-        acknowledgedBy: 'admin',
-        createdAt: new Date(Date.now() - 55 * 60 * 1000).toISOString(),
-        updatedAt: new Date(Date.now() - 35 * 60 * 1000).toISOString()
+        createdAt: new Date(Date.now() - 1000 * 60 * 65).toISOString(),
+        updatedAt: new Date().toISOString()
       }
     ];
-    sampleAlerts.forEach(a => this.alerts.set(a.id, a));
-
-    // Seed Notifications
-    const sampleNotifications: NotificationItem[] = [
-      {
-        id: 'notif-001',
-        title: 'Host Warning: esx-edge-blade02',
-        message: 'Memory threshold warning triggered on ESXi Blade 02.',
-        severity: 'WARNING',
-        isRead: false,
-        channel: 'IN_APP',
-        createdAt: new Date(Date.now() - 28 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'notif-002',
-        title: 'Backup Completed: datastore-nfs-backup-pool',
-        message: 'Snapshot replication of 6 VMs completed successfully (1.4 TB transfer).',
-        severity: 'INFO',
-        isRead: true,
-        channel: 'IN_APP',
-        createdAt: new Date(Date.now() - 180 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'notif-003',
-        title: 'CasaOS Disks SMART Check: All Passed',
-        message: '3 physical drives verified healthy with zero reallocated sectors.',
-        severity: 'INFO',
-        isRead: true,
-        channel: 'IN_APP',
-        createdAt: new Date(Date.now() - 360 * 60 * 1000).toISOString()
-      }
-    ];
-    sampleNotifications.forEach(n => this.notifications.set(n.id, n));
-
-    // Seed Events
-    this.events = [
-      {
-        id: 'evt-001',
-        connectionId: esxiConn1.id,
-        eventType: 'VM_POWER_STATE',
-        severity: 'INFO',
-        source: 'ESXi Provider',
-        message: 'Virtual machine prod-postgresql-primary health check verified OK',
-        timestamp: new Date(Date.now() - 5 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'evt-002',
-        connectionId: casaConn1.id,
-        eventType: 'APP_HEALTH_PING',
-        severity: 'INFO',
-        source: 'CasaOS Provider',
-        message: 'Plex Media Server processed 4 concurrent 4K transcoding streams',
-        timestamp: new Date(Date.now() - 18 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'evt-003',
-        connectionId: esxiConn2.id,
-        eventType: 'CPU_HIGH_LOAD',
-        severity: 'WARNING',
-        source: 'ESXi Monitor',
-        message: 'k8s-compute-worker-01 CPU usage spike to 88.5%',
-        timestamp: new Date(Date.now() - 14 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'evt-004',
-        connectionId: dockerConn1.id,
-        eventType: 'CONTAINER_STATUS',
-        severity: 'INFO',
-        source: 'Docker Engine',
-        message: 'Container gitlab-runner-heavy-builds finished CI pipeline #4920',
-        timestamp: new Date(Date.now() - 42 * 60 * 1000).toISOString()
-      }
-    ];
-
-    // Seed Audit Logs
-    this.auditLogs = [
-      {
-        id: 'audit-001',
-        userId: 'usr-admin-001',
-        username: 'admin',
-        connectionId: esxiConn1.id,
-        action: 'VM_POWER_ON',
-        resourceType: 'VM',
-        resourceId: 'vm-prod-db01',
-        details: 'Operator confirmed power-on verification for prod-postgresql-primary',
-        ipAddress: '10.20.0.100',
-        status: 'SUCCESS',
-        createdAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString()
-      },
-      {
-        id: 'audit-002',
-        userId: 'usr-op-002',
-        username: 'operator',
-        connectionId: casaConn1.id,
-        action: 'APP_RESTART',
-        resourceType: 'CASAOS_APP',
-        resourceId: 'app-homeassistant',
-        details: 'Restarted Home Assistant container after integration update',
-        ipAddress: '10.20.0.105',
-        status: 'SUCCESS',
-        createdAt: new Date(Date.now() - 7 * 3600 * 1000).toISOString()
-      },
-      {
-        id: 'audit-003',
-        userId: 'usr-admin-001',
-        username: 'admin',
-        connectionId: esxiConn1.id,
-        action: 'TEST_CONNECTION',
-        resourceType: 'ESXI_CONNECTION',
-        resourceId: esxiConn1.id,
-        details: 'Executed live latency and REST API connectivity test (14ms)',
-        ipAddress: '10.20.0.100',
-        status: 'SUCCESS',
-        createdAt: new Date(Date.now() - 12 * 3600 * 1000).toISOString()
-      }
-    ];
-  }
-
-  public addAuditLog(log: Omit<AuditLog, 'id' | 'createdAt'>): AuditLog {
-    const entry: AuditLog = {
-      ...log,
-      id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      createdAt: new Date().toISOString()
-    };
-    this.auditLogs.unshift(entry);
-    // Keep max 500 in memory
-    if (this.auditLogs.length > 500) {
-      this.auditLogs.pop();
+    for (const alt of initialAlerts) {
+      await this.saveAlert(alt);
     }
-    return entry;
-  }
 
-  public addEvent(event: Omit<SystemEvent, 'id' | 'timestamp'>): SystemEvent {
-    const entry: SystemEvent = {
-      ...event,
-      id: `evt-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      timestamp: new Date().toISOString()
-    };
-    this.events.unshift(entry);
-    if (this.events.length > 500) {
-      this.events.pop();
+    // 5. Initial System Events
+    const initialEvents: SystemEvent[] = [
+      {
+        id: 'evt-boot-cluster',
+        connectionId: esxiConn.id,
+        eventType: 'CLUSTER_HEALTH_AUDIT',
+        severity: 'INFO',
+        source: 'ESXi Production Cluster',
+        message: 'Cluster heartbeat and state synchronized across 6 virtual machines and 2 datastores',
+        timestamp: new Date(Date.now() - 1000 * 60 * 12).toISOString()
+      },
+      {
+        id: 'evt-casaos-app-sync',
+        connectionId: casaConn.id,
+        eventType: 'APP_STATUS_SYNC',
+        severity: 'INFO',
+        source: 'CasaOS Edge Gateway',
+        message: 'Detected 6 running containers and 1 stopped container in App Store registry',
+        timestamp: new Date(Date.now() - 1000 * 60 * 25).toISOString()
+      },
+      {
+        id: 'evt-docker-inspect',
+        connectionId: dockerConn.id,
+        eventType: 'CONTAINER_LIFECYCLE',
+        severity: 'INFO',
+        source: 'Docker Production Host',
+        message: 'Batch ETL consumer completed job #8928 and exited normally with code 0',
+        timestamp: new Date(Date.now() - 1000 * 60 * 240).toISOString()
+      }
+    ];
+    for (const evt of initialEvents) {
+      await this.saveEvent(evt);
     }
-    return entry;
-  }
 
-  public addMetric(point: MetricDataPoint) {
-    this.metrics.push(point);
-    // Keep max 288 data points (e.g. 24h at 5min intervals or 48h at 10min intervals)
-    if (this.metrics.length > 288) {
-      this.metrics.shift();
+    // 6. Initial Audit Logs
+    const initialAuditLogs: AuditLog[] = [
+      {
+        id: 'aud-sys-boot',
+        username: 'system',
+        action: 'SYSTEM_BOOT',
+        resourceType: 'PLATFORM',
+        details: 'NOC Management Platform initialized and monitoring engine started in Demo Mode',
+        status: 'SUCCESS',
+        createdAt: new Date(Date.now() - 1000 * 60 * 30).toISOString()
+      },
+      {
+        id: 'aud-admin-login-hist',
+        username: 'admin',
+        action: 'LOGIN_SUCCESS',
+        resourceType: 'AUTH',
+        details: 'Administrative session established from internal subnet (10.240.0.100)',
+        status: 'SUCCESS',
+        createdAt: new Date(Date.now() - 1000 * 60 * 28).toISOString()
+      }
+    ];
+    for (const aud of initialAuditLogs) {
+      await this.saveAuditLog(aud);
     }
   }
 }

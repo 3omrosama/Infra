@@ -80,7 +80,7 @@ router.get('/rules', authenticateToken, (req: AuthenticatedRequest, res: Respons
 });
 
 // Create Alert Rule (Admin only)
-router.post('/rules', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.post('/rules', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { name, metric, condition, threshold, durationSec, severity, targetType } = req.body;
 
   if (!name || !metric || !threshold || !severity) {
@@ -101,7 +101,7 @@ router.post('/rules', authenticateToken, requireRole('ADMIN'), (req: Authenticat
     createdAt: new Date().toISOString()
   };
 
-  store.alertRules.set(newRule.id, newRule);
+  await store.saveAlertRule(newRule);
 
   logAuditAction({
     userId: req.user?.id,
@@ -118,7 +118,7 @@ router.post('/rules', authenticateToken, requireRole('ADMIN'), (req: Authenticat
 });
 
 // Update Alert Rule
-router.put('/rules/:id', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.put('/rules/:id', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const rule = store.alertRules.get(id);
   if (!rule) {
@@ -133,12 +133,12 @@ router.put('/rules/:id', authenticateToken, requireRole('ADMIN'), (req: Authenti
   if (severity) rule.severity = severity;
   if (isEnabled !== undefined) rule.isEnabled = isEnabled;
 
-  store.alertRules.set(id, rule);
+  await store.saveAlertRule(rule);
   res.json(rule);
 });
 
 // Delete Alert Rule
-router.delete('/rules/:id', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.delete('/rules/:id', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const rule = store.alertRules.get(id);
   if (!rule) {
@@ -146,7 +146,7 @@ router.delete('/rules/:id', authenticateToken, requireRole('ADMIN'), (req: Authe
     return;
   }
 
-  store.alertRules.delete(id);
+  await store.deleteAlertRule(id);
   res.json({ success: true, message: `Alert rule '${rule.name}' removed` });
 });
 

@@ -222,6 +222,7 @@ export interface DockerVolume {
 }
 
 export interface MetricDataPoint {
+  connectionId?: string;
   timestamp: string;
   cpu: number;
   memory: number;

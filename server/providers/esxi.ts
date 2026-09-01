@@ -131,8 +131,9 @@ export class ESXiProvider extends BaseInfrastructureProvider {
   /**
    * Ensure authenticated session before executing inventory discovery
    */
-  private async ensureSession(): Promise<void> {
-    if (!this.client.getSessionCookie()) {
+  private async ensureSession(force = false): Promise<void> {
+    if (force || !this.client.getSessionCookie()) {
+      this.client.setSessionCookie(null);
       const connected = await this.connect();
       if (!connected) {
         throw new Error(this.lastError || 'Could not establish session to ESXi');

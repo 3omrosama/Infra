@@ -938,6 +938,10 @@ export class DataStore {
     this.alerts.set(alert.id, alert);
     if (!this.isDbConnected) return;
 
+    const validConnectionId = (alert.connectionId && this.connections.has(alert.connectionId))
+      ? alert.connectionId
+      : null;
+
     try {
       await prisma.alert.upsert({
         where: { id: alert.id },
@@ -958,7 +962,7 @@ export class DataStore {
         },
         create: {
           id: alert.id,
-          connectionId: alert.connectionId,
+          connectionId: validConnectionId,
           title: alert.title,
           message: alert.message,
           severity: alert.severity as any,
@@ -1058,11 +1062,16 @@ export class DataStore {
 
     if (!this.isDbConnected) return;
 
+    // Ensure connectionId is only passed if it actually exists in database to prevent FK constraint violations
+    const validConnectionId = (event.connectionId && this.connections.has(event.connectionId))
+      ? event.connectionId
+      : null;
+
     try {
       await prisma.event.create({
         data: {
           id: event.id,
-          connectionId: event.connectionId,
+          connectionId: validConnectionId,
           eventType: event.eventType,
           severity: event.severity as any,
           source: event.source,
@@ -1082,13 +1091,17 @@ export class DataStore {
 
     if (!this.isDbConnected) return;
 
+    const validConnectionId = (log.connectionId && this.connections.has(log.connectionId))
+      ? log.connectionId
+      : null;
+
     try {
       await prisma.auditLog.create({
         data: {
           id: log.id,
           userId: log.userId,
           username: log.username,
-          connectionId: log.connectionId,
+          connectionId: validConnectionId,
           action: log.action,
           resourceType: log.resourceType,
           resourceId: log.resourceId,
@@ -1111,9 +1124,14 @@ export class DataStore {
 
     if (!this.isDbConnected) return;
 
+    const validConnectionId = (metric.connectionId && this.connections.has(metric.connectionId))
+      ? metric.connectionId
+      : null;
+
     try {
       await prisma.metric.create({
         data: {
+          connectionId: validConnectionId,
           cpuPct: metric.cpu,
           memoryPct: metric.memory,
           storagePct: metric.storage,
@@ -1123,7 +1141,7 @@ export class DataStore {
         }
       });
     } catch (err: any) {
-      // Metric error should not interrupt telemetry
+      console.error(`[DataStore] Failed to persist metric:`, err?.message || err);
     }
   }
 

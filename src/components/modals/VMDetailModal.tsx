@@ -187,19 +187,19 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                 <div className="grid grid-cols-2 gap-4 text-xs">
                   <div>
                     <span className="text-slate-500">IP Address:</span>
-                    <span className="ml-2 font-mono text-slate-200">{vm.ipAddress || '192.168.1.140'}</span>
+                    <span className="ml-2 font-mono text-slate-200">{vm.ipAddress || 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-slate-500">VMware Tools:</span>
-                    <span className="ml-2 font-mono text-emerald-400">toolsOk (Version 12352)</span>
+                    <span className="ml-2 font-mono text-emerald-400">Guest Agent Connected</span>
                   </div>
                   <div>
                     <span className="text-slate-500">Hardware Compatibility:</span>
-                    <span className="ml-2 font-mono text-slate-200">vmx-19 (ESXi 7.0 U2+)</span>
+                    <span className="ml-2 font-mono text-slate-200">vSphere Virtual Hardware</span>
                   </div>
                   <div>
                     <span className="text-slate-500">Host Server:</span>
-                    <span className="ml-2 font-mono text-slate-200">{vm.hostName || 'esxi-node-01.local'}</span>
+                    <span className="ml-2 font-mono text-slate-200">{vm.hostName || 'Hypervisor Host'}</span>
                   </div>
                 </div>
               </div>
@@ -262,8 +262,8 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs font-mono text-slate-200">{vm.ipAddress || '192.168.1.140'}</p>
-                  <p className="text-[11px] text-slate-400 font-mono">00:50:56:a1:b2:c3</p>
+                  <p className="text-xs font-mono text-slate-200">{vm.ipAddress || 'IP Not Assigned / Unreported'}</p>
+                  <p className="text-[11px] text-slate-400 font-mono">vSphere PortGroup</p>
                 </div>
               </div>
             </div>

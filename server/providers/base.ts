@@ -19,9 +19,9 @@ import {
 export abstract class BaseInfrastructureProvider implements InfrastructureProvider {
   public id: string;
   public config: ProviderConnectionConfig;
-  protected isConnected = false;
-  protected lastError: string | null = null;
-  protected lastPingMs = 0;
+  public isConnected = false;
+  public lastError: string | null = null;
+  public lastPingMs = 0;
 
   constructor(config: ProviderConnectionConfig) {
     this.id = config.id || `prov-${Date.now()}`;
@@ -35,6 +35,12 @@ export abstract class BaseInfrastructureProvider implements InfrastructureProvid
   abstract getEvents(): Promise<SystemEvent[]>;
 
   async getStatus(): Promise<ProviderStatus> {
+    if (!this.isConnected) {
+      await this.connect().catch((err: any) => {
+        this.isConnected = false;
+        this.lastError = err?.message || 'Connection failed';
+      });
+    }
     return {
       status: this.isConnected ? 'ONLINE' : (this.lastError ? 'DEGRADED' : 'OFFLINE'),
       lastSeen: this.isConnected ? new Date().toISOString() : undefined,

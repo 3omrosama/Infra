@@ -256,7 +256,7 @@ export const CasaOSView: React.FC<CasaOSViewProps> = ({
                       <div className="flex items-center gap-1.5">
                         {app.port && isRunning && (
                           <a
-                            href={`http://${selectedServer?.ipAddress || '192.168.1.110'}:${app.port}`}
+                            href={`http://${selectedServer?.ipAddress || selectedServer?.host || 'localhost'}:${app.port}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="p-1.5 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-slate-300 hover:text-cyan-300 transition-colors"

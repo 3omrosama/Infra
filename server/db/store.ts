@@ -56,7 +56,7 @@ export class DataStore {
   public settings: SystemSettings = {
     pollIntervalSec: 30,
     metricRetentionDays: 30,
-    demoMode: true,
+    demoMode: false,
     webhookUrl: '',
     emailAlertsEnabled: false,
     smtpHost: '',

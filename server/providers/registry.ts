@@ -22,12 +22,16 @@ class ProviderRegistry {
 
     const existing = this.instances.get(effectiveConfig.id || '');
     if (existing) {
-      existing.config = effectiveConfig;
+      if (typeof (existing as any).updateConfig === 'function') {
+        (existing as any).updateConfig(effectiveConfig);
+      } else {
+        existing.config = effectiveConfig;
+      }
       return existing;
     }
 
-    // Only use DemoProvider if connection is explicitly marked as demo and demoMode is enabled
-    if (effectiveConfig.isDemo && store.settings.demoMode) {
+    // Only use DemoProvider if connection is explicitly marked as demo
+    if (effectiveConfig.isDemo) {
       const demoProvider = new DemoProvider(effectiveConfig);
       if (effectiveConfig.id) {
         this.instances.set(effectiveConfig.id, demoProvider);

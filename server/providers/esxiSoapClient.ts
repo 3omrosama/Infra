@@ -1,5 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
+import crypto from 'node:crypto';
+import net from 'node:net';
 
 export interface ESXiAboutInfo {
   name: string;
@@ -193,23 +195,54 @@ export class XmlParser {
  * Real VMware vSphere SOAP SDK Client
  */
 export class ESXiSoapClient {
-  private host: string;
-  private port: number;
-  private useHttps: boolean;
-  private skipSslVerify: boolean;
+  public connectionId?: string;
+  public host: string;
+  public port: number;
+  public useHttps: boolean;
+  public skipSslVerify: boolean;
   private sessionCookie: string | null = null;
   private serviceContent: ESXiServiceContent | null = null;
+  private agent: http.Agent | https.Agent;
 
   constructor(options: {
+    connectionId?: string;
     host: string;
     port?: number;
     useHttps?: boolean;
     skipSslVerify?: boolean;
   }) {
-    this.host = options.host;
+    this.connectionId = options.connectionId;
+    this.host = options.host.trim();
     this.useHttps = options.useHttps ?? true;
     this.port = options.port || (this.useHttps ? 443 : 80);
     this.skipSslVerify = options.skipSslVerify ?? false;
+
+    const isIp = net.isIP(this.host) !== 0;
+
+    if (this.useHttps) {
+      this.agent = new https.Agent({
+        rejectUnauthorized: !this.skipSslVerify,
+        checkServerIdentity: this.skipSslVerify ? () => undefined : undefined,
+        // Server Name Indication (SNI) must NOT be an IP literal per RFC 6066 to prevent TLS socket resets
+        servername: isIp ? undefined : this.host,
+        minVersion: 'TLSv1.2',
+        secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
+        ciphers: this.skipSslVerify ? 'DEFAULT:@SECLEVEL=0' : undefined,
+        keepAlive: true,
+        keepAliveMsecs: 10000,
+        maxSockets: 10,
+        maxFreeSockets: 5,
+        timeout: 20000
+      });
+    } else {
+      this.agent = new http.Agent({
+        keepAlive: true,
+        keepAliveMsecs: 10000,
+        maxSockets: 10,
+        maxFreeSockets: 5,
+        timeout: 20000
+      });
+    }
   }
 
   public getSessionCookie(): string | null {
@@ -220,117 +253,134 @@ export class ESXiSoapClient {
     this.sessionCookie = cookie;
   }
 
+  public destroy() {
+    try {
+      this.agent.destroy();
+    } catch {
+      // Ignore agent cleanup errors
+    }
+  }
+
   /**
    * Execute low-level HTTP/HTTPS SOAP request with isolated per-connection TLS settings
    */
-  async request(soapBodyXml: string, soapAction = 'urn:vim25/6.0', timeoutMs = 8000): Promise<SoapHttpResponse> {
+  async request(soapBodyXml: string, soapAction = 'urn:vim25/6.0', timeoutMs = 12000, retryCount = 1): Promise<SoapHttpResponse> {
     const envelope = createSoapEnvelope(soapBodyXml);
     const transport = this.useHttps ? https : http;
+    const endpointUrl = `${this.useHttps ? 'https' : 'http'}://${this.host}:${this.port}/sdk`;
 
     const headers: Record<string, string | number> = {
       'Content-Type': 'text/xml; charset=utf-8',
       'SOAPAction': `"${soapAction}"`,
       'Content-Length': Buffer.byteLength(envelope, 'utf8'),
-      'User-Agent': 'NOC-Infrastructure-Manager/1.0 (VMware vSphere Web Services Client)'
+      'User-Agent': 'NOC-Infrastructure-Manager/1.0 (VMware vSphere Web Services Client)',
+      'Connection': 'keep-alive'
     };
 
     if (this.sessionCookie) {
       headers['Cookie'] = this.sessionCookie;
     }
 
-    const agent = this.useHttps
-      ? new https.Agent({
-          rejectUnauthorized: !this.skipSslVerify,
-          keepAlive: true,
-          maxSockets: 5
-        })
-      : new http.Agent({
-          keepAlive: true,
-          maxSockets: 5
-        });
+    const executeAttempt = (): Promise<SoapHttpResponse> => {
+      return new Promise<SoapHttpResponse>((resolve, reject) => {
+        const req = transport.request(
+          {
+            hostname: this.host,
+            port: this.port,
+            path: '/sdk',
+            method: 'POST',
+            headers,
+            agent: this.agent,
+            timeout: timeoutMs
+          },
+          (res) => {
+            let responseBody = '';
+            res.setEncoding('utf8');
 
-    return new Promise<SoapHttpResponse>((resolve, reject) => {
-      const req = transport.request(
-        {
-          hostname: this.host,
-          port: this.port,
-          path: '/sdk',
-          method: 'POST',
-          headers,
-          agent,
-          timeout: timeoutMs
-        },
-        (res) => {
-          let responseBody = '';
-          res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+              responseBody += chunk;
+            });
 
-          res.on('data', (chunk) => {
-            responseBody += chunk;
-          });
-
-          res.on('end', () => {
-            let cookie: string | undefined = undefined;
-            const setCookieHeader = res.headers['set-cookie'];
-            if (setCookieHeader) {
-              const rawCookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
-              for (const c of rawCookies) {
-                if (c.includes('vmware_soap_session')) {
-                  const match = c.match(/vmware_soap_session="?[^";]+"?/);
-                  if (match) {
-                    cookie = match[0];
-                    break;
+            res.on('end', () => {
+              let cookie: string | undefined = undefined;
+              const setCookieHeader = res.headers['set-cookie'];
+              if (setCookieHeader) {
+                const rawCookies = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+                for (const c of rawCookies) {
+                  if (c.includes('vmware_soap_session')) {
+                    const match = c.match(/vmware_soap_session="?[^";]+"?/);
+                    if (match) {
+                      cookie = match[0];
+                      break;
+                    }
                   }
                 }
+                if (!cookie && rawCookies.length > 0) {
+                  cookie = rawCookies[0].split(';')[0];
+                }
               }
-              if (!cookie && rawCookies.length > 0) {
-                cookie = rawCookies[0].split(';')[0];
+
+              // Check if response contains a SOAP Fault
+              const fault = XmlParser.checkFault(responseBody);
+              if (fault && res.statusCode !== 200) {
+                const faultErr: any = new Error(fault);
+                faultErr.statusCode = res.statusCode;
+                reject(faultErr);
+                return;
               }
-            }
 
-            // Check if response contains a SOAP Fault
-            const fault = XmlParser.checkFault(responseBody);
-            if (fault && res.statusCode !== 200) {
-              reject(new Error(fault));
-              return;
-            }
-
-            resolve({
-              statusCode: res.statusCode || 200,
-              statusMessage: res.statusMessage || '',
-              headers: res.headers,
-              body: responseBody,
-              cookie
+              resolve({
+                statusCode: res.statusCode || 200,
+                statusMessage: res.statusMessage || '',
+                headers: res.headers,
+                body: responseBody,
+                cookie
+              });
             });
-          });
-        }
-      );
+          }
+        );
 
-      req.on('timeout', () => {
-        req.destroy(new Error(`Connection timed out after ${timeoutMs}ms connecting to ESXi at ${this.host}:${this.port}`));
+        req.on('timeout', () => {
+          req.destroy(new Error(`Connection timed out after ${timeoutMs}ms connecting to ESXi at ${this.host}:${this.port}`));
+        });
+
+        req.on('error', (err: any) => {
+          // Log structured diagnostic without passwords or sensitive tokens
+          console.error(`[ESXiSoapClient] Diagnostic Error: connectionId=${this.connectionId || 'n/a'} endpoint=${endpointUrl} proto=${this.useHttps ? 'HTTPS' : 'HTTP'} port=${this.port} skipSslVerify=${this.skipSslVerify} code=${err.code || 'UNKNOWN'} msg="${err.message}"`);
+
+          if (
+            err.code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+            err.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+            err.code === 'CERT_HAS_EXPIRED' ||
+            err.code === 'DEPTH_ZERO_SELF_SIGNED_CERT'
+          ) {
+            reject(new Error(`SSL certificate verification failed (${err.code}). Please enable 'Skip SSL Check' if your ESXi host uses self-signed certificates.`));
+          } else if (err.code === 'ECONNREFUSED') {
+            reject(new Error(`Connection refused at ${this.host}:${this.port}. Check if ESXi management daemon (hostd/rhttpproxy) is running on port ${this.port}.`));
+          } else if (err.code === 'ENOTFOUND') {
+            reject(new Error(`Host '${this.host}' not found (DNS resolution failed).`));
+          } else if (err.code === 'ETIMEDOUT' || err.code === 'EHOSTUNREACH') {
+            reject(new Error(`Host at ${this.host}:${this.port} is unreachable (Network timeout / No route to host).`));
+          } else {
+            reject(err);
+          }
+        });
+
+        req.write(envelope);
+        req.end();
       });
+    };
 
-      req.on('error', (err: any) => {
-        if (
-          err.code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
-          err.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
-          err.code === 'CERT_HAS_EXPIRED' ||
-          err.code === 'DEPTH_ZERO_SELF_SIGNED_CERT'
-        ) {
-          reject(new Error(`SSL certificate verification failed (${err.code}). Please enable 'Skip SSL Check' if your ESXi host uses self-signed certificates.`));
-        } else if (err.code === 'ECONNREFUSED') {
-          reject(new Error(`Connection refused at ${this.host}:${this.port}. Check if ESXi management daemon (hostd) is running on port ${this.port}.`));
-        } else if (err.code === 'ENOTFOUND') {
-          reject(new Error(`Host '${this.host}' not found (DNS resolution failed).`));
-        } else if (err.code === 'ETIMEDOUT' || err.code === 'EHOSTUNREACH') {
-          reject(new Error(`Host at ${this.host}:${this.port} is unreachable (Network timeout / No route to host).`));
-        } else {
-          reject(err);
-        }
-      });
-
-      req.write(envelope);
-      req.end();
-    });
+    try {
+      return await executeAttempt();
+    } catch (err: any) {
+      // Retry once for transient socket reset or idle connection close
+      if (retryCount > 0 && (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.message?.includes('socket disconnected'))) {
+        console.warn(`[ESXiSoapClient] Retrying request on ${endpointUrl} after transient socket reset (${err.code || err.message})`);
+        return this.request(soapBodyXml, soapAction, timeoutMs, retryCount - 1);
+      }
+      throw err;
+    }
   }
 
   /**

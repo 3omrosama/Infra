@@ -18,11 +18,28 @@ export class ESXiProvider extends BaseInfrastructureProvider {
   constructor(config: ProviderConnectionConfig) {
     super(config);
     this.client = new ESXiSoapClient({
+      connectionId: config.id,
       host: config.host,
       port: config.port,
       useHttps: config.useHttps ?? true,
       skipSslVerify: config.skipSslVerify ?? false
     });
+  }
+
+  public updateConfig(config: ProviderConnectionConfig) {
+    this.config = config;
+    if (this.client) {
+      this.client.destroy();
+    }
+    this.client = new ESXiSoapClient({
+      connectionId: config.id,
+      host: config.host,
+      port: config.port,
+      useHttps: config.useHttps ?? true,
+      skipSslVerify: config.skipSslVerify ?? false
+    });
+    this.isConnected = false;
+    this.lastError = null;
   }
 
   /**
@@ -60,6 +77,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
       // Ignore disconnect errors
     } finally {
       this.isConnected = false;
+      this.client.destroy();
     }
   }
 
@@ -69,6 +87,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
   async testConnection(): Promise<ProviderTestResult> {
     const startTime = Date.now();
     const testClient = new ESXiSoapClient({
+      connectionId: this.config.id,
       host: this.config.host,
       port: this.config.port,
       useHttps: this.config.useHttps ?? true,
@@ -89,7 +108,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
       const latencyMs = Date.now() - startTime;
 
       // 3. Graceful logout
-      await testClient.logout();
+      await testClient.logout().catch(() => {});
 
       return {
         success: true,
@@ -104,6 +123,8 @@ export class ESXiProvider extends BaseInfrastructureProvider {
         message: `Connection failed: ${err.message || 'Unknown ESXi connection error'}`,
         latencyMs
       };
+    } finally {
+      testClient.destroy();
     }
   }
 

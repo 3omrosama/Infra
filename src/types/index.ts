@@ -343,8 +343,12 @@ export interface ProviderConnectionConfig {
   username?: string;
   password?: string;
   token?: string;
+  encryptedSecret?: string;
+  secretIv?: string;
+  secretTag?: string;
   pollIntervalSec?: number;
   isEnabled?: boolean;
+  isDemo?: boolean;
 }
 
 export interface ProviderTestResult {

@@ -764,6 +764,126 @@ export class DataStore {
     }
   }
 
+  public async saveHost(host: ESXiHost): Promise<void> {
+    this.esxiHosts.set(host.id, host);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.host.upsert({
+        where: { id: host.id },
+        update: {
+          hostname: host.hostname,
+          ipAddress: host.ipAddress,
+          version: host.version,
+          build: host.build || null,
+          cpuModel: host.cpuModel || null,
+          cpuCores: host.cpuCores,
+          cpuMhzTotal: host.cpuMhzTotal || null,
+          cpuUsagePct: host.cpuUsagePct,
+          memoryBytesTotal: BigInt(Math.floor(host.memoryBytesTotal || 0)),
+          memoryUsagePct: host.memoryUsagePct,
+          storageBytesTotal: BigInt(Math.floor(host.storageBytesTotal || 0)),
+          storageBytesUsed: BigInt(Math.floor(host.storageBytesUsed || 0)),
+          storageUsagePct: host.storageUsagePct,
+          uptimeSeconds: BigInt(Math.floor(host.uptimeSeconds || 0)),
+          powerState: (host.powerState as any) || 'RUNNING',
+          vmCount: host.vmCount || 0,
+          runningVmCount: host.runningVmCount || 0,
+          datastores: (host.datastores as any) || [],
+          networksJson: (host.networks as any) || []
+        },
+        create: {
+          id: host.id,
+          connectionId: host.connectionId,
+          hostname: host.hostname,
+          ipAddress: host.ipAddress,
+          version: host.version,
+          build: host.build || null,
+          cpuModel: host.cpuModel || null,
+          cpuCores: host.cpuCores,
+          cpuMhzTotal: host.cpuMhzTotal || null,
+          cpuUsagePct: host.cpuUsagePct,
+          memoryBytesTotal: BigInt(Math.floor(host.memoryBytesTotal || 0)),
+          memoryUsagePct: host.memoryUsagePct,
+          storageBytesTotal: BigInt(Math.floor(host.storageBytesTotal || 0)),
+          storageBytesUsed: BigInt(Math.floor(host.storageBytesUsed || 0)),
+          storageUsagePct: host.storageUsagePct,
+          uptimeSeconds: BigInt(Math.floor(host.uptimeSeconds || 0)),
+          powerState: (host.powerState as any) || 'RUNNING',
+          vmCount: host.vmCount || 0,
+          runningVmCount: host.runningVmCount || 0,
+          datastores: (host.datastores as any) || [],
+          networksJson: (host.networks as any) || []
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist host '${host.hostname}':`, err?.message || err);
+    }
+  }
+
+  public async saveVirtualMachine(vm: VirtualMachine): Promise<void> {
+    this.virtualMachines.set(vm.id, vm);
+    if (!this.isDbConnected) return;
+
+    try {
+      await prisma.virtualMachine.upsert({
+        where: { id: vm.id },
+        update: {
+          hostId: vm.hostId || null,
+          externalVmId: vm.externalVmId,
+          name: vm.name,
+          powerState: (vm.powerState as any) || 'RUNNING',
+          cpuCount: vm.cpuCount,
+          cpuUsagePct: vm.cpuUsagePct,
+          memoryBytes: BigInt(Math.floor(vm.memoryBytes || 0)),
+          memoryUsagePct: vm.memoryUsagePct,
+          storageBytes: BigInt(Math.floor(vm.storageBytes || 0)),
+          storageUsagePct: vm.storageUsagePct,
+          ipAddress: vm.ipAddress || null,
+          guestOs: vm.guestOs || null,
+          uptimeSeconds: BigInt(Math.floor(vm.uptimeSeconds || 0)),
+          datastoreName: vm.datastoreName || null,
+          networkName: vm.networkName || null
+        },
+        create: {
+          id: vm.id,
+          connectionId: vm.connectionId,
+          hostId: vm.hostId || null,
+          externalVmId: vm.externalVmId,
+          name: vm.name,
+          powerState: (vm.powerState as any) || 'RUNNING',
+          cpuCount: vm.cpuCount,
+          cpuUsagePct: vm.cpuUsagePct,
+          memoryBytes: BigInt(Math.floor(vm.memoryBytes || 0)),
+          memoryUsagePct: vm.memoryUsagePct,
+          storageBytes: BigInt(Math.floor(vm.storageBytes || 0)),
+          storageUsagePct: vm.storageUsagePct,
+          ipAddress: vm.ipAddress || null,
+          guestOs: vm.guestOs || null,
+          uptimeSeconds: BigInt(Math.floor(vm.uptimeSeconds || 0)),
+          datastoreName: vm.datastoreName || null,
+          networkName: vm.networkName || null,
+          createdAt: new Date(vm.createdAt || Date.now())
+        }
+      });
+    } catch (err: any) {
+      console.error(`[DataStore] Failed to persist VM '${vm.name}':`, err?.message || err);
+    }
+  }
+
+  public async syncDiscoveredESXi(connectionId: string, hosts: ESXiHost[], vms: VirtualMachine[]): Promise<void> {
+    for (const host of hosts) {
+      await this.saveHost(host);
+    }
+    for (const vm of vms) {
+      // If host is available, associate hostId
+      if (!vm.hostId && hosts.length > 0) {
+        vm.hostId = hosts[0].id;
+      }
+      await this.saveVirtualMachine(vm);
+    }
+  }
+
   public async saveAlert(alert: Alert): Promise<void> {
     this.alerts.set(alert.id, alert);
     if (!this.isDbConnected) return;

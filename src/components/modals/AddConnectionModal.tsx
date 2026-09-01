@@ -73,6 +73,42 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     }
   };
 
+  const handleTestConnection = async () => {
+    if (!host || !port) {
+      showToast('Validation Error', 'Please enter host IP/FQDN and port to test connection', 'WARNING');
+      return;
+    }
+
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const result = await api.testConnectionConfig({
+        type,
+        host,
+        port: parseInt(port, 10),
+        useHttps,
+        skipSslVerify,
+        username,
+        password: password || undefined,
+        token: token || undefined
+      });
+      setTestResult(result);
+      if (result.success) {
+        showToast('Connection Test Succeeded', result.message, 'INFO');
+      } else {
+        showToast('Connection Test Failed', result.message, 'CRITICAL');
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err.message || 'Connection test failed'
+      });
+      showToast('Connection Test Failed', err.message || 'Connection test failed', 'CRITICAL');
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !host || !port) {
@@ -322,33 +358,55 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
           )}
 
           {/* Footer Controls */}
-          <div className="pt-2 flex items-center justify-end gap-3">
+          <div className="pt-2 flex items-center justify-between gap-3">
             <button
               type="button"
-              id="btn-cancel-add-conn"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
+              id="btn-test-add-conn"
+              disabled={isTesting || isSubmitting}
+              onClick={handleTestConnection}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-cyan-300 hover:text-cyan-200 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800/60 rounded-xl transition-all disabled:opacity-50"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              id="btn-submit-add-conn"
-              disabled={isSubmitting}
-              className="flex items-center gap-2 px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-lg shadow-cyan-600/20 transition-all"
-            >
-              {isSubmitting ? (
+              {isTesting ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Connecting...</span>
+                  <span>Probing Node...</span>
                 </>
               ) : (
                 <>
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Save & Verify Node</span>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Test Connection</span>
                 </>
               )}
             </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                id="btn-cancel-add-conn"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                id="btn-submit-add-conn"
+                disabled={isSubmitting || isTesting}
+                className="flex items-center gap-2 px-5 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-lg shadow-cyan-600/20 transition-all"
+              >
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Connecting...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Save & Verify Node</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </div>

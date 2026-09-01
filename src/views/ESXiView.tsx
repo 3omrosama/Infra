@@ -96,27 +96,27 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
                         <Server className="w-5 h-5" />
                       </div>
                       <div>
-                        <h4 className="font-bold text-white text-sm">{host.name}</h4>
+                        <h4 className="font-bold text-white text-sm">{host.hostname || 'ESXi Hypervisor'}</h4>
                         <p className="text-xs text-slate-400 font-mono mt-0.5">{host.ipAddress}</p>
                       </div>
                     </div>
                     <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                      {host.status}
+                      {host.powerState || 'RUNNING'}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-800/80 text-[11px]">
                     <div>
                       <p className="text-slate-500">CPU</p>
-                      <p className="font-mono font-semibold text-white mt-0.5">{host.cpuUsagePct.toFixed(1)}%</p>
+                      <p className="font-mono font-semibold text-white mt-0.5">{(host.cpuUsagePct || 0).toFixed(1)}%</p>
                     </div>
                     <div>
                       <p className="text-slate-500">RAM</p>
-                      <p className="font-mono font-semibold text-white mt-0.5">{host.memoryUsagePct.toFixed(1)}%</p>
+                      <p className="font-mono font-semibold text-white mt-0.5">{(host.memoryUsagePct || 0).toFixed(1)}%</p>
                     </div>
                     <div>
                       <p className="text-slate-500">Uptime</p>
-                      <p className="font-mono font-semibold text-slate-300 mt-0.5">{formatUptime(host.uptimeSeconds)}</p>
+                      <p className="font-mono font-semibold text-slate-300 mt-0.5">{formatUptime(host.uptimeSeconds || 0)}</p>
                     </div>
                   </div>
                 </div>
@@ -131,35 +131,35 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
               <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="text-base font-bold text-white">{selectedHost.name} Specifications</h3>
-                    <p className="text-xs text-slate-400 font-mono mt-0.5">{selectedHost.model}</p>
+                    <h3 className="text-base font-bold text-white">{selectedHost.hostname || 'Hypervisor'} Specifications</h3>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">{selectedHost.cpuModel || 'x86_64 Architecture'}</p>
                   </div>
                   <div className="text-right">
                     <span className="px-2.5 py-1 rounded-lg bg-slate-800 text-cyan-400 font-mono text-xs font-semibold">
-                      {selectedHost.version} (Build {selectedHost.buildNumber})
+                      {selectedHost.version} {selectedHost.build ? `(Build ${selectedHost.build})` : ''}
                     </span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                    <p className="text-[10px] font-semibold text-slate-400 uppercase">CPU Sockets</p>
-                    <p className="text-base font-bold text-white mt-0.5">{selectedHost.cpuSockets} Socket(s)</p>
-                    <p className="text-[11px] text-cyan-400 font-mono">{selectedHost.cpuCores} Cores Total</p>
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase">CPU Sockets / Cores</p>
+                    <p className="text-base font-bold text-white mt-0.5">{selectedHost.cpuCores} Core(s)</p>
+                    <p className="text-[11px] text-cyan-400 font-mono">{selectedHost.cpuMhzTotal ? `${selectedHost.cpuMhzTotal} MHz Total` : 'Standard Clock'}</p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
                     <p className="text-[10px] font-semibold text-slate-400 uppercase">Physical Memory</p>
-                    <p className="text-base font-bold text-white mt-0.5">{formatBytes(selectedHost.memoryTotalBytes)}</p>
-                    <p className="text-[11px] text-emerald-400 font-mono">{formatBytes(selectedHost.memoryUsedBytes)} Used</p>
+                    <p className="text-base font-bold text-white mt-0.5">{formatBytes(selectedHost.memoryBytesTotal || 0)}</p>
+                    <p className="text-[11px] text-emerald-400 font-mono">{formatBytes((selectedHost.memoryBytesTotal || 0) * ((selectedHost.memoryUsagePct || 0) / 100))} Used</p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
                     <p className="text-[10px] font-semibold text-slate-400 uppercase">Power State</p>
-                    <p className="text-base font-bold text-emerald-400 mt-0.5">{selectedHost.powerState}</p>
+                    <p className="text-base font-bold text-emerald-400 mt-0.5">{selectedHost.powerState || 'RUNNING'}</p>
                     <p className="text-[11px] text-slate-400 font-mono">ACPI Standard</p>
                   </div>
                   <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
                     <p className="text-[10px] font-semibold text-slate-400 uppercase">Host Uptime</p>
-                    <p className="text-base font-bold text-white mt-0.5">{formatUptime(selectedHost.uptimeSeconds)}</p>
+                    <p className="text-base font-bold text-white mt-0.5">{formatUptime(selectedHost.uptimeSeconds || 0)}</p>
                     <p className="text-[11px] text-slate-400 font-mono">Continuous</p>
                   </div>
                 </div>
@@ -170,14 +170,17 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-cyan-400" />
-                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Mounted VMFS Datastores</h3>
+                    <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Mounted Datastores</h3>
                   </div>
                   <span className="text-xs font-mono text-slate-500">{selectedHost.datastores?.length || 0} Stores</span>
                 </div>
 
                 <div className="space-y-3">
                   {selectedHost.datastores?.map(ds => {
-                    const usedPct = Math.round((ds.usedBytes / ds.capacityBytes) * 100);
+                    const capacity = ds.capacityBytes || 1;
+                    const free = ds.freeBytes || 0;
+                    const used = Math.max(0, capacity - free);
+                    const usedPct = ds.usagePct || Math.round((used / capacity) * 100);
                     return (
                       <div key={ds.id} className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 space-y-2">
                         <div className="flex items-center justify-between text-xs">
@@ -188,14 +191,14 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
                             </span>
                           </div>
                           <span className="font-mono text-slate-300">
-                            {formatBytes(ds.freeBytes)} Free of {formatBytes(ds.capacityBytes)}
+                            {formatBytes(free)} Free of {formatBytes(capacity)}
                           </span>
                         </div>
 
                         <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full ${usedPct > 85 ? 'bg-rose-500' : (usedPct > 70 ? 'bg-amber-500' : 'bg-cyan-500')}`}
-                            style={{ width: `${usedPct}%` }}
+                            style={{ width: `${Math.min(100, Math.max(0, usedPct))}%` }}
                           />
                         </div>
                       </div>
@@ -217,11 +220,10 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
                       <div className="flex items-center justify-between">
                         <h4 className="font-bold text-white">{net.name}</h4>
                         <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-800 text-cyan-400 rounded">
-                          VLAN {net.vlanId}
+                          {net.status || 'ACTIVE'}
                         </span>
                       </div>
-                      <p className="text-[11px] text-slate-400 font-mono">vSwitch: {net.vswitch}</p>
-                      <p className="text-[11px] text-slate-500 font-mono">Uplinks: {net.uplinks.join(', ')}</p>
+                      <p className="text-[11px] text-slate-400 font-mono">Type: {net.type}</p>
                     </div>
                   ))}
                 </div>

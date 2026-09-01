@@ -108,6 +108,15 @@ class ApiClient {
     return this.handleResponse(res);
   }
 
+  async testConnectionConfig(data: Partial<ProviderConnectionConfig>): Promise<ProviderTestResult> {
+    const res = await fetch('/api/infrastructure/test-config', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(data)
+    });
+    return this.handleResponse(res);
+  }
+
   async syncConnection(id: string): Promise<{ success: boolean; connection: InfrastructureConnection }> {
     const res = await fetch(`/api/infrastructure/${id}/sync`, {
       method: 'POST',

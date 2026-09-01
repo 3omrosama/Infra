@@ -64,6 +64,19 @@ class MonitoringPoller {
             txRateTotal += metrics.networkTxKbps;
             nodeCount++;
 
+            // Periodic inventory discovery update for ESXi
+            if (conn.type === 'ESXI') {
+              try {
+                const hosts = await provider.getHosts();
+                const vms = await provider.getVirtualMachines();
+                if (hosts.length > 0 || vms.length > 0) {
+                  await store.syncDiscoveredESXi(conn.id, hosts, vms);
+                }
+              } catch (discErr) {
+                // Ignore transient background discovery error
+              }
+            }
+
             // Evaluate Alert Rules for this node
             await alertEngine.evaluateMetrics({
               connectionId: conn.id,

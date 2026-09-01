@@ -4,42 +4,55 @@ import { CasaOSProvider } from './casaos.js';
 import { DockerProvider } from './docker.js';
 import { DemoProvider } from './demo.js';
 import { store } from '../db/store.js';
+import { decryptSecret } from '../crypto.js';
 
 class ProviderRegistry {
   private instances: Map<string, InfrastructureProvider> = new Map();
 
   public getProvider(config: ProviderConnectionConfig): InfrastructureProvider {
-    const existing = this.instances.get(config.id || '');
+    // Decrypt credentials if stored encrypted form is present and plain password/token is not provided
+    const effectiveConfig: ProviderConnectionConfig = { ...config };
+    if (config.encryptedSecret && config.secretIv && config.secretTag && !config.password && !config.token) {
+      const decrypted = decryptSecret(config.encryptedSecret, config.secretIv, config.secretTag);
+      if (config.type === 'CASAOS' || config.type === 'DOCKER' || config.type === 'PROXMOX') {
+        effectiveConfig.token = decrypted;
+      }
+      effectiveConfig.password = decrypted;
+    }
+
+    const existing = this.instances.get(effectiveConfig.id || '');
     if (existing) {
-      existing.config = config;
+      existing.config = effectiveConfig;
       return existing;
     }
 
-    // If demo mode is active and this connection is a demo node, use DemoProvider
-    if (config.id && (config.id.startsWith('conn-esxi-') || config.id.startsWith('conn-casaos-') || config.id.startsWith('conn-docker-')) && store.settings.demoMode) {
-      const demoProvider = new DemoProvider(config);
-      this.instances.set(config.id, demoProvider);
+    // Only use DemoProvider if connection is explicitly marked as demo and demoMode is enabled
+    if (effectiveConfig.isDemo && store.settings.demoMode) {
+      const demoProvider = new DemoProvider(effectiveConfig);
+      if (effectiveConfig.id) {
+        this.instances.set(effectiveConfig.id, demoProvider);
+      }
       return demoProvider;
     }
 
     let provider: InfrastructureProvider;
-    switch (config.type) {
+    switch (effectiveConfig.type) {
       case 'ESXI':
-        provider = new ESXiProvider(config);
+        provider = new ESXiProvider(effectiveConfig);
         break;
       case 'CASAOS':
-        provider = new CasaOSProvider(config);
+        provider = new CasaOSProvider(effectiveConfig);
         break;
       case 'DOCKER':
-        provider = new DockerProvider(config);
+        provider = new DockerProvider(effectiveConfig);
         break;
       default:
-        provider = new DemoProvider(config);
+        provider = new DemoProvider(effectiveConfig);
         break;
     }
 
-    if (config.id) {
-      this.instances.set(config.id, provider);
+    if (effectiveConfig.id) {
+      this.instances.set(effectiveConfig.id, provider);
     }
     return provider;
   }

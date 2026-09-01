@@ -5,6 +5,7 @@ import { encryptSecret } from '../crypto.js';
 import { providerRegistry } from '../providers/registry.js';
 import { logAuditAction } from '../monitoring/audit.js';
 import { monitoringPoller } from '../monitoring/poller.js';
+import { ProviderConnectionConfig } from '../../src/types/index.js';
 
 const router = Router();
 
@@ -57,6 +58,17 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
   if (testRes.success) {
     newConn.status = 'ONLINE';
     newConn.lastSeen = new Date().toISOString();
+    
+    // Automatically discover inventory for supported providers
+    if (type === 'ESXI') {
+      try {
+        const hosts = await provider.getHosts();
+        const vms = await provider.getVirtualMachines();
+        await store.syncDiscoveredESXi(newConn.id, hosts, vms);
+      } catch (discErr: any) {
+        console.error(`[InfrastructureRoutes] Initial discovery error on '${name}':`, discErr?.message || discErr);
+      }
+    }
   } else {
     newConn.status = 'DEGRADED';
     newConn.errorDetails = testRes.message;
@@ -79,7 +91,7 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
   res.status(201).json(safeConn);
 });
 
-// Test connection endpoint
+// Test connection endpoint for existing connection
 router.post('/:id/test', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const conn = store.connections.get(id);
@@ -103,6 +115,40 @@ router.post('/:id/test', authenticateToken, async (req: AuthenticatedRequest, re
     ipAddress: req.ip,
     status: result.success ? 'SUCCESS' : 'FAILURE'
   });
+
+  res.json(result);
+});
+
+// Test unpersisted connection parameters directly (before saving)
+router.post('/test-config', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const { type, host, port, useHttps, skipSslVerify, username, password, token } = req.body;
+
+  if (!type || !host || !port) {
+    res.status(400).json({ error: 'Type, host, and port are required for testing' });
+    return;
+  }
+
+  const tempConfig: ProviderConnectionConfig = {
+    id: `test-${Date.now().toString(36)}`,
+    name: 'Test-Probe',
+    type,
+    host,
+    port: parseInt(port, 10),
+    useHttps: useHttps ?? true,
+    skipSslVerify: skipSslVerify ?? false,
+    username: username || '',
+    password: password || undefined,
+    token: token || undefined,
+    pollIntervalSec: 30,
+    isEnabled: true,
+    isDemo: false
+  };
+
+  const provider = providerRegistry.getProvider(tempConfig);
+  const result = await provider.testConnection();
+  if (tempConfig.id) {
+    providerRegistry.removeProvider(tempConfig.id);
+  }
 
   res.json(result);
 });

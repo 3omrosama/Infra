@@ -44,12 +44,14 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<{ message: string; existingName?: string } | null>(null);
 
   if (!isOpen) return null;
 
   const handleTypeChange = (selected: InfrastructureType) => {
     setType(selected);
     setTestResult(null);
+    setDuplicateError(null);
     if (selected === 'ESXI') {
       setPort('443');
       setUseHttps(true);
@@ -81,6 +83,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
 
     setIsTesting(true);
     setTestResult(null);
+    setDuplicateError(null);
     try {
       const result = await api.testConnectionConfig({
         type,
@@ -117,6 +120,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     }
 
     setIsSubmitting(true);
+    setDuplicateError(null);
     try {
       const config: ProviderConnectionConfig = {
         name,
@@ -136,7 +140,16 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
       onSuccess();
       onClose();
     } catch (err: any) {
-      showToast('Connection Failed', err.message || 'Failed to add connection', 'CRITICAL');
+      if (err.status === 409 || err.code === 'DUPLICATE_CONNECTION') {
+        const existingName = err.data?.existingConnection?.name;
+        setDuplicateError({
+          message: err.message || 'This infrastructure node is already registered in the dashboard.',
+          existingName
+        });
+        showToast('Connection Exists', err.message, 'WARNING');
+      } else {
+        showToast('Connection Failed', err.message || 'Failed to add connection', 'CRITICAL');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -344,6 +357,36 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               </div>
             )}
           </div>
+
+          {/* Duplicate connection warning banner */}
+          {duplicateError && (
+            <div id="duplicate-conn-banner" className="p-3.5 rounded-xl border bg-amber-500/10 border-amber-500/30 text-amber-300 flex items-start gap-2.5 text-xs">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-1">
+                <div className="font-semibold text-amber-200">Connection Already Exists</div>
+                <p className="text-amber-300/90 leading-relaxed">{duplicateError.message}</p>
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSuccess();
+                      onClose();
+                    }}
+                    className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg text-xs font-medium transition-colors"
+                  >
+                    View Existing Node
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateError(null)}
+                    className="px-2.5 py-1 text-slate-400 hover:text-slate-200 text-xs transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Test connection result banner */}
           {testResult && (

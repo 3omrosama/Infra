@@ -38,7 +38,12 @@ class ApiClient {
         localStorage.removeItem('noc_auth_token');
       }
       const errorData = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(errorData.error || `HTTP error ${res.status}`);
+      const msg = errorData.message || errorData.error || `HTTP error ${res.status}`;
+      const error: any = new Error(msg);
+      error.status = res.status;
+      error.code = errorData.error;
+      error.data = errorData;
+      throw error;
     }
     return res.json();
   }

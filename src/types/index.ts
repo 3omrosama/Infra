@@ -48,6 +48,7 @@ export interface InfrastructureConnection {
   useHttps: boolean;
   skipSslVerify: boolean;
   username?: string;
+  endpointKey?: string;
   status: ConnectionStatus;
   lastSeen?: string | null;
   lastCheckedAt?: string | null;
@@ -343,6 +344,7 @@ export interface ProviderConnectionConfig {
   username?: string;
   password?: string;
   token?: string;
+  endpointKey?: string;
   encryptedSecret?: string;
   secretIv?: string;
   secretTag?: string;

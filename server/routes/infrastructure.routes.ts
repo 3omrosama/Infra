@@ -6,6 +6,7 @@ import { providerRegistry } from '../providers/registry.js';
 import { logAuditAction } from '../monitoring/audit.js';
 import { monitoringPoller } from '../monitoring/poller.js';
 import { ProviderConnectionConfig } from '../../src/types/index.js';
+import { normalizeEndpoint } from '../utils/endpoint.js';
 
 const router = Router();
 
@@ -18,7 +19,7 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
   res.json(list);
 });
 
-// Create new infrastructure connection (Admin/Operator)
+// Create new infrastructure connection (Admin/Operator) - Strictly Idempotent
 router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req: AuthenticatedRequest, res: Response) => {
   const { name, type, host, port, useHttps, skipSslVerify, username, password, token, pollIntervalSec } = req.body;
 
@@ -27,18 +28,34 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
     return;
   }
 
+  // 1. Normalize connection endpoint for deterministic identity
+  const normalized = normalizeEndpoint(type, host, port, useHttps);
+
+  // 2. Server-side Duplicate Prevention
+  const existingConn = store.findConnectionByEndpoint(normalized.key);
+  if (existingConn) {
+    const { encryptedSecret, secretIv, secretTag, ...safeExisting } = existingConn;
+    res.status(409).json({
+      error: 'DUPLICATE_CONNECTION',
+      message: `${normalized.type} node ${normalized.host}:${normalized.port} is already registered as '${existingConn.name}'.`,
+      existingConnection: safeExisting
+    });
+    return;
+  }
+
   const rawSecret = password || token || '';
   const { encrypted, iv, tag } = encryptSecret(rawSecret);
 
   const newConn: StoredConnection = {
     id: `conn-${type.toLowerCase()}-${Date.now().toString(36)}`,
-    name,
-    type,
-    host,
-    port: parseInt(port, 10),
-    useHttps: useHttps ?? true,
+    name: name.trim(),
+    type: normalized.type as any,
+    host: normalized.host,
+    port: normalized.port,
+    useHttps: normalized.useHttps,
+    endpointKey: normalized.key,
     skipSslVerify: skipSslVerify ?? false,
-    username: username || '',
+    username: username ? username.trim() : '',
     encryptedSecret: encrypted,
     secretIv: iv,
     secretTag: tag,
@@ -82,7 +99,7 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
     action: 'CREATE_CONNECTION',
     resourceType: 'INFRASTRUCTURE',
     resourceId: newConn.id,
-    details: `Added new ${type} infrastructure connection '${name}' (${host}:${port})`,
+    details: `Added new ${type} infrastructure connection '${name}' (${normalized.host}:${normalized.port})`,
     ipAddress: req.ip,
     status: 'SUCCESS'
   });
@@ -176,12 +193,29 @@ router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (r
 
   const { name, host, port, useHttps, skipSslVerify, username, password, token, pollIntervalSec, isEnabled } = req.body;
 
-  if (name) conn.name = name;
-  if (host) conn.host = host;
-  if (port) conn.port = parseInt(port, 10);
-  if (useHttps !== undefined) conn.useHttps = useHttps;
+  const newType = conn.type;
+  const newHost = host !== undefined ? host : conn.host;
+  const newPort = port !== undefined ? parseInt(port, 10) : conn.port;
+  const newUseHttps = useHttps !== undefined ? useHttps : conn.useHttps;
+
+  // Re-normalize and check for duplicates against other connections
+  const normalized = normalizeEndpoint(newType, newHost, newPort, newUseHttps);
+  const duplicate = store.findConnectionByEndpoint(normalized.key);
+  if (duplicate && duplicate.id !== id) {
+    res.status(409).json({
+      error: 'DUPLICATE_CONNECTION',
+      message: `${normalized.type} node ${normalized.host}:${normalized.port} is already registered under '${duplicate.name}'.`
+    });
+    return;
+  }
+
+  if (name) conn.name = name.trim();
+  conn.host = normalized.host;
+  conn.port = normalized.port;
+  conn.useHttps = normalized.useHttps;
+  conn.endpointKey = normalized.key;
   if (skipSslVerify !== undefined) conn.skipSslVerify = skipSslVerify;
-  if (username !== undefined) conn.username = username;
+  if (username !== undefined) conn.username = username.trim();
   if (pollIntervalSec) conn.pollIntervalSec = parseInt(pollIntervalSec, 10);
   if (isEnabled !== undefined) conn.isEnabled = isEnabled;
 

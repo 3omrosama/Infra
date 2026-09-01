@@ -18,6 +18,7 @@ import {
 } from '../../src/types/index.js';
 import { hashPassword, encryptSecret } from '../crypto.js';
 import { prisma, checkDatabaseConnection } from './prisma.js';
+import { normalizeEndpoint } from '../utils/endpoint.js';
 
 export interface StoredUser {
   id: string;
@@ -351,6 +352,7 @@ export class DataStore {
         useHttps: c.useHttps,
         skipSslVerify: c.skipSslVerify,
         username: c.username || undefined,
+        endpointKey: c.endpointKey || undefined,
         encryptedSecret: c.encryptedSecret || undefined,
         secretIv: c.secretIv || undefined,
         secretTag: c.secretTag || undefined,
@@ -692,7 +694,19 @@ export class DataStore {
     }
   }
 
+  public findConnectionByEndpoint(endpointKey: string): StoredConnection | undefined {
+    for (const conn of this.connections.values()) {
+      if (conn.endpointKey === endpointKey) return conn;
+      const norm = normalizeEndpoint(conn.type, conn.host, conn.port, conn.useHttps);
+      if (norm.key === endpointKey) return conn;
+    }
+    return undefined;
+  }
+
   public async saveConnection(conn: StoredConnection): Promise<void> {
+    if (!conn.endpointKey) {
+      conn.endpointKey = normalizeEndpoint(conn.type, conn.host, conn.port, conn.useHttps).key;
+    }
     this.connections.set(conn.id, conn);
     if (!this.isDbConnected) return;
 
@@ -707,6 +721,7 @@ export class DataStore {
           useHttps: conn.useHttps,
           skipSslVerify: conn.skipSslVerify,
           username: conn.username,
+          endpointKey: conn.endpointKey,
           encryptedSecret: conn.encryptedSecret,
           secretIv: conn.secretIv,
           secretTag: conn.secretTag,
@@ -727,6 +742,7 @@ export class DataStore {
           useHttps: conn.useHttps,
           skipSslVerify: conn.skipSslVerify,
           username: conn.username,
+          endpointKey: conn.endpointKey,
           encryptedSecret: conn.encryptedSecret,
           secretIv: conn.secretIv,
           secretTag: conn.secretTag,
@@ -754,10 +770,17 @@ export class DataStore {
     Array.from(this.casaosApps.values()).filter(a => a.connectionId === id).forEach(a => this.casaosApps.delete(a.id));
     Array.from(this.dockerContainers.values()).filter(c => c.connectionId === id).forEach(c => this.dockerContainers.delete(c.id));
     Array.from(this.dockerImages.values()).filter(img => img.id === id).forEach(img => this.dockerImages.delete(img.id));
+    Array.from(this.alerts.values()).filter(alt => alt.connectionId === id).forEach(alt => this.alerts.delete(alt.id));
 
     if (!this.isDbConnected) return;
 
     try {
+      await prisma.host.deleteMany({ where: { connectionId: id } }).catch(() => {});
+      await prisma.virtualMachine.deleteMany({ where: { connectionId: id } }).catch(() => {});
+      await prisma.casaOSServer.deleteMany({ where: { connectionId: id } }).catch(() => {});
+      await prisma.container.deleteMany({ where: { connectionId: id } }).catch(() => {});
+      await prisma.alert.deleteMany({ where: { connectionId: id } }).catch(() => {});
+      await prisma.event.deleteMany({ where: { connectionId: id } }).catch(() => {});
       await prisma.infrastructureConnection.delete({ where: { id } }).catch(() => {});
     } catch (err: any) {
       console.error(`[DataStore] Failed to delete connection '${id}' from DB:`, err?.message || err);
@@ -872,15 +895,42 @@ export class DataStore {
   }
 
   public async syncDiscoveredESXi(connectionId: string, hosts: ESXiHost[], vms: VirtualMachine[]): Promise<void> {
+    const discoveredHostIds = new Set<string>();
+    const discoveredVmIds = new Set<string>();
+
     for (const host of hosts) {
+      host.connectionId = connectionId;
+      discoveredHostIds.add(host.id);
       await this.saveHost(host);
     }
+
     for (const vm of vms) {
-      // If host is available, associate hostId
+      vm.connectionId = connectionId;
       if (!vm.hostId && hosts.length > 0) {
         vm.hostId = hosts[0].id;
       }
+      discoveredVmIds.add(vm.id);
       await this.saveVirtualMachine(vm);
+    }
+
+    // Prune stale hosts previously associated with this connection that are no longer present
+    for (const [id, h] of this.esxiHosts.entries()) {
+      if (h.connectionId === connectionId && !discoveredHostIds.has(id)) {
+        this.esxiHosts.delete(id);
+        if (this.isDbConnected) {
+          await prisma.host.delete({ where: { id } }).catch(() => {});
+        }
+      }
+    }
+
+    // Prune stale VMs previously associated with this connection that are no longer present
+    for (const [id, v] of this.virtualMachines.entries()) {
+      if (v.connectionId === connectionId && !discoveredVmIds.has(id)) {
+        this.virtualMachines.delete(id);
+        if (this.isDbConnected) {
+          await prisma.virtualMachine.delete({ where: { id } }).catch(() => {});
+        }
+      }
     }
   }
 

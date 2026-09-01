@@ -132,6 +132,7 @@ model InfrastructureConnection {
   encryptedSecret String?                 // Encrypted at rest (AES-256-GCM)
   secretIv        String?
   secretTag       String?
+  endpointKey     String?                 @unique
   status          ConnectionStatus        @default(OFFLINE)
   lastSeen        DateTime?
   lastCheckedAt   DateTime?
@@ -157,6 +158,7 @@ model InfrastructureConnection {
 
   @@index([type])
   @@index([status])
+  @@index([endpointKey])
 }
 
 model Host {

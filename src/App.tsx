@@ -111,25 +111,26 @@ const AppContent: React.FC = () => {
 
   // Handle Real-time Metric Updates
   useEffect(() => {
-    if (lastMetric) {
+    if (lastMetric && summary && (summary.hasLiveInfrastructure || summary.isDemoMode)) {
       setSummary(prev => {
-        if (!prev) return prev;
+        if (!prev || (!prev.hasLiveInfrastructure && !prev.isDemoMode)) return prev;
         const currentHist = prev.historicalMetrics || [];
         const newHistorical = [...(currentHist.length > 0 ? currentHist.slice(1) : []), lastMetric];
         return {
           ...prev,
           metrics: {
-            cpuUtilizationPct: lastMetric.cpu ?? prev.metrics?.cpuUtilizationPct ?? 0,
-            memoryUtilizationPct: lastMetric.memory ?? prev.metrics?.memoryUtilizationPct ?? 0,
-            storageUtilizationPct: lastMetric.storage ?? prev.metrics?.storageUtilizationPct ?? 0,
-            networkRxTotalKbps: lastMetric.networkRxKbps ?? prev.metrics?.networkRxTotalKbps ?? 0,
-            networkTxTotalKbps: lastMetric.networkTxKbps ?? prev.metrics?.networkTxTotalKbps ?? 0
+            ...prev.metrics,
+            cpuUtilizationPct: lastMetric.cpu ?? prev.metrics?.cpuUtilizationPct ?? null,
+            memoryUtilizationPct: lastMetric.memory ?? prev.metrics?.memoryUtilizationPct ?? null,
+            storageUtilizationPct: lastMetric.storage ?? prev.metrics?.storageUtilizationPct ?? null,
+            networkTrafficRxKbps: lastMetric.networkRxKbps ?? prev.metrics?.networkTrafficRxKbps ?? null,
+            networkTrafficTxKbps: lastMetric.networkTxKbps ?? prev.metrics?.networkTrafficTxKbps ?? null
           },
           historicalMetrics: newHistorical
         };
       });
     }
-  }, [lastMetric]);
+  }, [lastMetric, summary?.hasLiveInfrastructure, summary?.isDemoMode]);
 
   // Handle Real-time Alerts from Socket
   useEffect(() => {
@@ -141,6 +142,20 @@ const AppContent: React.FC = () => {
       loadAllData();
     }
   }, [socketAlerts, showToast, loadAllData]);
+
+  const handleToggleDemoMode = async () => {
+    try {
+      const res = await api.toggleDemoMode();
+      showToast(
+        res.demoMode ? 'Demo Mode Enabled' : 'Live Hardware Mode',
+        res.demoMode ? 'Synthetic infrastructure topology and telemetry active' : 'Live hardware mode active. Connect physical/virtual nodes.',
+        'INFO'
+      );
+      await loadAllData();
+    } catch (err: any) {
+      showToast('Mode Switch Error', err?.message || 'Failed to toggle mode', 'ERROR');
+    }
+  };
 
   // Keyboard shortcut listener (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -188,10 +203,11 @@ const AppContent: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Header */}
         <Header
-          onOpenCommandMenu={() => setIsCommandMenuOpen(true)}
+          onOpenSearch={() => setIsCommandMenuOpen(true)}
           onOpenAddConnection={() => setIsAddConnectionOpen(true)}
           onRefreshData={loadAllData}
-          canManage={canManage}
+          isDemoMode={Boolean(summary?.isDemoMode)}
+          onToggleDemoMode={handleToggleDemoMode}
         />
 
         {/* Viewport Router */}

@@ -47,18 +47,22 @@ export const StorageView: React.FC<StorageViewProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Raw Capacity</p>
-          <p className="text-2xl font-black text-white mt-1">{formatBytes(totalDatastoreCapacity || 25998734000000)}</p>
+          <p className="text-2xl font-black text-white mt-1">{datastores.length > 0 ? formatBytes(totalDatastoreCapacity) : 'No Data'}</p>
           <p className="text-[11px] text-slate-500 mt-1">Aggregated across all storage arrays</p>
         </div>
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Used Storage Space</p>
-          <p className="text-2xl font-black text-purple-400 mt-1">{formatBytes(totalDatastoreUsed || 16298734000000)}</p>
-          <p className="text-[11px] text-slate-500 mt-1">62.8% Average allocation</p>
+          <p className="text-2xl font-black text-purple-400 mt-1">{datastores.length > 0 ? formatBytes(totalDatastoreUsed) : 'No Data'}</p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            {datastores.length > 0 && totalDatastoreCapacity > 0
+              ? `${((totalDatastoreUsed / totalDatastoreCapacity) * 100).toFixed(1)}% Average allocation`
+              : 'No storage allocated'}
+          </p>
         </div>
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Available Free Space</p>
-          <p className="text-2xl font-black text-emerald-400 mt-1">{formatBytes(totalDatastoreFree || 9700000000000)}</p>
-          <p className="text-[11px] text-slate-500 mt-1">Healthy headroom available</p>
+          <p className="text-2xl font-black text-emerald-400 mt-1">{datastores.length > 0 ? formatBytes(totalDatastoreFree) : 'No Data'}</p>
+          <p className="text-[11px] text-slate-500 mt-1">{datastores.length > 0 ? 'Healthy headroom available' : 'No storage connected'}</p>
         </div>
       </div>
 

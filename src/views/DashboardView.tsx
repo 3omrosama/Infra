@@ -230,7 +230,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span>
               {summary.metrics?.cpuCoresTotal !== null && summary.metrics?.cpuCoresTotal !== undefined
                 ? `Aggregated ${summary.metrics.cpuCoresTotal} Cores`
-                : 'Cores: --'}
+                : 'Cores: No Data'}
             </span>
             <span>{summary.hasLiveInfrastructure || summary.isDemoMode ? 'Live Telemetry' : 'No Telemetry'}</span>
           </div>
@@ -261,10 +261,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
             <span>
-              Used: {summary.metrics?.memoryBytesUsed ? formatBytes(summary.metrics.memoryBytesUsed) : (summary.metrics?.memoryUtilizationPct !== null && summary.metrics?.memoryUtilizationPct !== undefined ? `${summary.metrics.memoryUtilizationPct.toFixed(1)}%` : '--')}
+              {summary.metrics?.memoryBytesUsed !== null && summary.metrics?.memoryBytesUsed !== undefined 
+                ? `Used: ${formatBytes(summary.metrics.memoryBytesUsed)}` 
+                : (summary.metrics?.memoryUtilizationPct !== null && summary.metrics?.memoryUtilizationPct !== undefined 
+                    ? `Used: ${summary.metrics.memoryUtilizationPct.toFixed(1)}%` 
+                    : 'Used: No Data')}
             </span>
             <span>
-              Capacity: {summary.metrics?.memoryBytesTotal ? formatBytes(summary.metrics.memoryBytesTotal) : '--'}
+              {summary.metrics?.memoryBytesTotal !== null && summary.metrics?.memoryBytesTotal !== undefined 
+                ? `Capacity: ${formatBytes(summary.metrics.memoryBytesTotal)}` 
+                : 'Capacity: No Data'}
             </span>
           </div>
         </div>
@@ -292,10 +298,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
             <span>
-              Used: {summary.metrics?.storageBytesUsed ? formatBytes(summary.metrics.storageBytesUsed) : (summary.metrics?.storageUtilizationPct !== null && summary.metrics?.storageUtilizationPct !== undefined ? `${summary.metrics.storageUtilizationPct.toFixed(1)}%` : '--')}
+              {summary.metrics?.storageBytesUsed !== null && summary.metrics?.storageBytesUsed !== undefined 
+                ? `Used: ${formatBytes(summary.metrics.storageBytesUsed)}` 
+                : (summary.metrics?.storageUtilizationPct !== null && summary.metrics?.storageUtilizationPct !== undefined 
+                    ? `Used: ${summary.metrics.storageUtilizationPct.toFixed(1)}%` 
+                    : 'Used: No Data')}
             </span>
             <span>
-              Capacity: {summary.metrics?.storageBytesTotal ? formatBytes(summary.metrics.storageBytesTotal) : '--'}
+              {summary.metrics?.storageBytesTotal !== null && summary.metrics?.storageBytesTotal !== undefined 
+                ? `Capacity: ${formatBytes(summary.metrics.storageBytesTotal)}` 
+                : 'Capacity: No Data'}
             </span>
           </div>
         </div>

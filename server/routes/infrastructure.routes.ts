@@ -167,13 +167,15 @@ router.post('/test-config', authenticateToken, async (req: AuthenticatedRequest,
     return;
   }
 
+  const normalized = normalizeEndpoint(type, host, port, useHttps);
+
   const tempConfig: ProviderConnectionConfig = {
     id: `test-${Date.now().toString(36)}`,
     name: 'Test-Probe',
-    type,
-    host,
-    port: parseInt(port, 10),
-    useHttps: useHttps ?? true,
+    type: normalized.type as any,
+    host: normalized.host,
+    port: normalized.port,
+    useHttps: normalized.useHttps,
     skipSslVerify: skipSslVerify ?? false,
     username: username || '',
     password: password || undefined,

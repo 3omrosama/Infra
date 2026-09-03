@@ -118,9 +118,14 @@ export class ESXiProvider extends BaseInfrastructureProvider {
       };
     } catch (err: any) {
       const latencyMs = Date.now() - startTime;
+      const rawMsg = err.message || 'Unknown ESXi connection error';
+      const cleanMsg = (rawMsg.startsWith('DNS resolution') || rawMsg.startsWith('Authentication') || rawMsg.startsWith('TLS') || rawMsg.startsWith('TCP connection') || rawMsg.startsWith('SOAP Fault') || rawMsg.startsWith('Connection failed'))
+        ? rawMsg
+        : `Connection failed: ${rawMsg}`;
+
       return {
         success: false,
-        message: `Connection failed: ${err.message || 'Unknown ESXi connection error'}`,
+        message: cleanMsg,
         latencyMs
       };
     } finally {

@@ -224,8 +224,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
-            <span>Aggregated 40 Cores</span>
-            <span>Freq: 2.80 GHz Avg</span>
+            <span>{summary.metrics?.cpuCoresTotal ? `Aggregated ${summary.metrics.cpuCoresTotal} Cores` : 'Cores: Dynamic'}</span>
+            <span>Live Telemetry</span>
           </div>
         </div>
 
@@ -251,8 +251,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
-            <span>Used: 82.2 GB</span>
-            <span>Capacity: 128 GB</span>
+            <span>
+              Used: {summary.metrics?.memoryBytesUsed ? formatBytes(summary.metrics.memoryBytesUsed) : `${(summary.metrics?.memoryUtilizationPct ?? 0).toFixed(1)}%`}
+            </span>
+            <span>
+              Capacity: {summary.metrics?.memoryBytesTotal ? formatBytes(summary.metrics.memoryBytesTotal) : '--'}
+            </span>
           </div>
         </div>
 
@@ -276,8 +280,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
-            <span>Used: 14.8 TB</span>
-            <span>Capacity: 23.6 TB</span>
+            <span>
+              Used: {summary.metrics?.storageBytesUsed ? formatBytes(summary.metrics.storageBytesUsed) : `${(summary.metrics?.storageUtilizationPct ?? 0).toFixed(1)}%`}
+            </span>
+            <span>
+              Capacity: {summary.metrics?.storageBytesTotal ? formatBytes(summary.metrics.storageBytesTotal) : '--'}
+            </span>
           </div>
         </div>
       </div>

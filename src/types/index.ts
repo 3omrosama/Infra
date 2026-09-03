@@ -324,6 +324,11 @@ export interface DashboardSummary {
     storageUtilizationPct: number;
     networkTrafficRxKbps: number;
     networkTrafficTxKbps: number;
+    cpuCoresTotal?: number;
+    memoryBytesTotal?: number;
+    memoryBytesUsed?: number;
+    storageBytesTotal?: number;
+    storageBytesUsed?: number;
   };
   historicalMetrics: MetricDataPoint[];
   activeAlerts: Alert[];

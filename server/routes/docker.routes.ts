@@ -8,7 +8,12 @@ const router = Router();
 
 // Global list of all Docker Containers
 router.get('/all-containers', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  const containers = Array.from(store.dockerContainers.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  const containers = Array.from(store.dockerContainers.values()).filter(c => {
+    if (isDemo) return true;
+    const conn = store.connections.get(c.connectionId);
+    return conn && !conn.isDemo;
+  });
   res.json(containers);
 });
 

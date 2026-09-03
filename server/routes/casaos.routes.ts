@@ -8,13 +8,23 @@ const router = Router();
 
 // Global list of CasaOS servers
 router.get('/all-servers', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  const servers = Array.from(store.casaosServers.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  const servers = Array.from(store.casaosServers.values()).filter(s => {
+    if (isDemo) return true;
+    const conn = store.connections.get(s.connectionId);
+    return conn && !conn.isDemo;
+  });
   res.json(servers);
 });
 
 // Global list of all CasaOS Apps
 router.get('/all-apps', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  const apps = Array.from(store.casaosApps.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  const apps = Array.from(store.casaosApps.values()).filter(a => {
+    if (isDemo) return true;
+    const conn = store.connections.get(a.connectionId);
+    return conn && !conn.isDemo;
+  });
   res.json(apps);
 });
 

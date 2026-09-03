@@ -12,10 +12,13 @@ const router = Router();
 
 // List all infrastructure connections (without exposing plaintext passwords)
 const listConnections = (req: AuthenticatedRequest, res: Response) => {
-  const list = Array.from(store.connections.values()).map(conn => {
-    const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
-    return safeConn;
-  });
+  const isDemo = Boolean(store.settings.demoMode);
+  const list = Array.from(store.connections.values())
+    .filter(conn => isDemo || !conn.isDemo)
+    .map(conn => {
+      const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
+      return safeConn;
+    });
   res.json(list);
 };
 router.get('/', authenticateToken, listConnections);
@@ -326,10 +329,14 @@ router.delete('/:id', authenticateToken, requireRole('ADMIN'), deleteConnectionH
 router.delete('/connections/:id', authenticateToken, requireRole('ADMIN'), deleteConnectionHandler);
 
 // Toggle Demo Mode
-router.post('/demo/toggle', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {
+router.post('/demo/toggle', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
   store.settings.demoMode = !store.settings.demoMode;
+  await store.saveSettings(store.settings);
   if (store.settings.demoMode) {
-    store.seedDemoData();
+    await store.seedDemoData();
+  } else {
+    // When live mode is enabled, trigger immediate background poll of live connections
+    monitoringPoller.pollAll().catch(() => {});
   }
 
   logAuditAction({

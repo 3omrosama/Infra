@@ -10,7 +10,13 @@ const router = Router();
 // List all alerts (filter by status and severity)
 router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
   const { status, severity } = req.query;
-  let alerts = Array.from(store.alerts.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  let alerts = Array.from(store.alerts.values()).filter(a => {
+    if (isDemo) return true;
+    if (!a.connectionId) return true;
+    const conn = store.connections.get(a.connectionId);
+    return conn && !conn.isDemo;
+  });
 
   if (status) {
     alerts = alerts.filter(a => a.status === status);

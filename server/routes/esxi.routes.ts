@@ -8,13 +8,23 @@ const router = Router();
 
 // Global list of all Virtual Machines across all connections
 router.get('/all-vms', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  const vms = Array.from(store.virtualMachines.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  const vms = Array.from(store.virtualMachines.values()).filter(vm => {
+    if (isDemo) return true;
+    const conn = store.connections.get(vm.connectionId);
+    return conn && !conn.isDemo;
+  });
   res.json(vms);
 });
 
 // Global list of all ESXi Hosts
 router.get('/all-hosts', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
-  const hosts = Array.from(store.esxiHosts.values());
+  const isDemo = Boolean(store.settings.demoMode);
+  const hosts = Array.from(store.esxiHosts.values()).filter(h => {
+    if (isDemo) return true;
+    const conn = store.connections.get(h.connectionId);
+    return conn && !conn.isDemo;
+  });
   res.json(hosts);
 });
 

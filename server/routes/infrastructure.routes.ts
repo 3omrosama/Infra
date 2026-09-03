@@ -11,16 +11,18 @@ import { normalizeEndpoint } from '../utils/endpoint.js';
 const router = Router();
 
 // List all infrastructure connections (without exposing plaintext passwords)
-router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+const listConnections = (req: AuthenticatedRequest, res: Response) => {
   const list = Array.from(store.connections.values()).map(conn => {
     const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
     return safeConn;
   });
   res.json(list);
-});
+};
+router.get('/', authenticateToken, listConnections);
+router.get('/connections', authenticateToken, listConnections);
 
 // Create new infrastructure connection (Admin/Operator) - Strictly Idempotent
-router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req: AuthenticatedRequest, res: Response) => {
+const createConnectionHandler = async (req: AuthenticatedRequest, res: Response) => {
   const { name, type, host, port, useHttps, skipSslVerify, username, password, token, pollIntervalSec } = req.body;
 
   if (!name || !type || !host || !port) {
@@ -72,9 +74,11 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
   // Test connection immediately
   const provider = providerRegistry.getProvider(newConn);
   const testRes = await provider.testConnection();
+  newConn.lastCheckedAt = new Date().toISOString();
   if (testRes.success) {
     newConn.status = 'ONLINE';
     newConn.lastSeen = new Date().toISOString();
+    newConn.errorDetails = undefined;
     
     // Automatically discover inventory for supported providers
     if (type === 'ESXI') {
@@ -106,10 +110,12 @@ router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req
 
   const { encryptedSecret, secretIv, secretTag, ...safeConn } = newConn;
   res.status(201).json(safeConn);
-});
+};
+router.post('/', authenticateToken, requireRole('ADMIN', 'OPERATOR'), createConnectionHandler);
+router.post('/connections', authenticateToken, requireRole('ADMIN', 'OPERATOR'), createConnectionHandler);
 
 // Test connection endpoint for existing connection
-router.post('/:id/test', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+const testConnectionHandler = async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const conn = store.connections.get(id);
 
@@ -120,6 +126,17 @@ router.post('/:id/test', authenticateToken, async (req: AuthenticatedRequest, re
 
   const provider = providerRegistry.getProvider(conn);
   const result = await provider.testConnection();
+
+  conn.lastCheckedAt = new Date().toISOString();
+  if (result.success) {
+    conn.status = 'ONLINE';
+    conn.lastSeen = new Date().toISOString();
+    conn.errorDetails = undefined;
+  } else {
+    conn.status = 'DEGRADED';
+    conn.errorDetails = result.message;
+  }
+  await store.saveConnection(conn);
 
   logAuditAction({
     userId: req.user?.id,
@@ -134,7 +151,9 @@ router.post('/:id/test', authenticateToken, async (req: AuthenticatedRequest, re
   });
 
   res.json(result);
-});
+};
+router.post('/:id/test', authenticateToken, testConnectionHandler);
+router.post('/connections/:id/test', authenticateToken, testConnectionHandler);
 
 // Test unpersisted connection parameters directly (before saving)
 router.post('/test-config', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
@@ -170,8 +189,21 @@ router.post('/test-config', authenticateToken, async (req: AuthenticatedRequest,
   res.json(result);
 });
 
+// Get single connection by ID
+const getConnectionByIdHandler = (req: AuthenticatedRequest, res: Response) => {
+  const conn = store.connections.get(req.params.id);
+  if (!conn) {
+    res.status(404).json({ error: 'Connection not found' });
+    return;
+  }
+  const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
+  res.json(safeConn);
+};
+router.get('/:id', authenticateToken, getConnectionByIdHandler);
+router.get('/connections/:id', authenticateToken, getConnectionByIdHandler);
+
 // Force sync / immediate polling of connection
-router.post('/:id/sync', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+const syncConnectionHandler = async (req: AuthenticatedRequest, res: Response) => {
   await monitoringPoller.pollAll();
   const conn = store.connections.get(req.params.id);
   if (!conn) {
@@ -180,10 +212,12 @@ router.post('/:id/sync', authenticateToken, async (req: AuthenticatedRequest, re
   }
   const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
   res.json({ success: true, connection: safeConn });
-});
+};
+router.post('/:id/sync', authenticateToken, syncConnectionHandler);
+router.post('/connections/:id/sync', authenticateToken, syncConnectionHandler);
 
 // Update connection
-router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (req: AuthenticatedRequest, res: Response) => {
+const updateConnectionHandler = async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const conn = store.connections.get(id);
   if (!conn) {
@@ -245,10 +279,12 @@ router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), async (r
 
   const { encryptedSecret, secretIv, secretTag, ...safeConn } = conn;
   res.json(safeConn);
-});
+};
+router.put('/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), updateConnectionHandler);
+router.put('/connections/:id', authenticateToken, requireRole('ADMIN', 'OPERATOR'), updateConnectionHandler);
 
 // Delete connection
-router.delete('/:id', authenticateToken, requireRole('ADMIN'), async (req: AuthenticatedRequest, res: Response) => {
+const deleteConnectionHandler = async (req: AuthenticatedRequest, res: Response) => {
   const { id } = req.params;
   const conn = store.connections.get(id);
   if (!conn) {
@@ -285,7 +321,9 @@ router.delete('/:id', authenticateToken, requireRole('ADMIN'), async (req: Authe
   });
 
   res.json({ success: true, message: `Connection '${conn.name}' deleted successfully` });
-});
+};
+router.delete('/:id', authenticateToken, requireRole('ADMIN'), deleteConnectionHandler);
+router.delete('/connections/:id', authenticateToken, requireRole('ADMIN'), deleteConnectionHandler);
 
 // Toggle Demo Mode
 router.post('/demo/toggle', authenticateToken, requireRole('ADMIN'), (req: AuthenticatedRequest, res: Response) => {

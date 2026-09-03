@@ -9,18 +9,22 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Trash2, 
+  Edit3,
   Activity, 
   ExternalLink, 
   Clock, 
   Lock,
   Radio,
-  Search
+  Search,
+  Shield,
+  ShieldAlert
 } from 'lucide-react';
 import { InfrastructureConnection } from '../types/index';
 import { api } from '../lib/api';
 import { useNotifications } from '../context/NotificationContext';
 import { formatRelativeTime } from '../lib/utils';
 import { ConfirmDialog } from '../components/layout/ConfirmDialog';
+import { AddConnectionModal } from '../components/modals/AddConnectionModal';
 
 interface InfrastructureViewProps {
   connections: InfrastructureConnection[];
@@ -40,6 +44,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [nodeToDelete, setNodeToDelete] = useState<InfrastructureConnection | null>(null);
+  const [connectionToEdit, setConnectionToEdit] = useState<InfrastructureConnection | null>(null);
 
   const safeConnections = connections || [];
   const filteredConnections = safeConnections.filter(c => 
@@ -53,13 +58,17 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
     try {
       const result = await api.testConnection(conn.id);
       if (result.success) {
-        showToast('Connection Test Passed', `${conn.name} is reachable (${result.latencyMs}ms)`, 'INFO');
+        showToast(
+          'Connection Test Passed', 
+          `Successfully reached ${conn.name} (${result.latencyMs !== undefined ? `${result.latencyMs}ms` : 'online'})`, 
+          'INFO'
+        );
       } else {
         showToast('Connection Test Failed', `${conn.name}: ${result.message}`, 'CRITICAL');
       }
       onRefresh();
     } catch (err: any) {
-      showToast('Test Error', err.message, 'CRITICAL');
+      showToast('Test Error', err.message || 'Connection test failed', 'CRITICAL');
     } finally {
       setTestingId(null);
     }
@@ -153,7 +162,7 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                 <th className="py-3.5 px-4">Endpoint Address</th>
                 <th className="py-3.5 px-4">Status</th>
                 <th className="py-3.5 px-4">Poll Rate</th>
-                <th className="py-3.5 px-4">Last Seen</th>
+                <th className="py-3.5 px-4">Last Checked</th>
                 <th className="py-3.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -170,6 +179,10 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                   if (conn.type === 'CASAOS') TypeIcon = Home;
                   if (conn.type === 'DOCKER') TypeIcon = Boxes;
                   if (conn.type === 'PROXMOX') TypeIcon = Layers;
+
+                  const isOnline = conn.status === 'ONLINE';
+                  const isDegraded = conn.status === 'DEGRADED';
+                  const isConnecting = conn.status === 'CONNECTING';
 
                   return (
                     <tr key={conn.id} className="hover:bg-slate-800/40 transition-colors">
@@ -196,29 +209,50 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                       {/* Provider Type */}
                       <td className="py-4 px-4">
                         <span className="px-2 py-1 rounded-md bg-slate-800 text-slate-300 font-mono text-[11px]">
-                          {conn.type}
+                          {conn.type === 'ESXI' ? 'VMware ESXi' : conn.type}
                         </span>
                       </td>
 
-                      {/* Host & Port */}
-                      <td className="py-4 px-4 font-mono text-slate-300">
-                        {conn.useHttps ? 'https://' : 'http://'}{conn.host}:{conn.port}
+                      {/* Host & Port with TLS Indicator */}
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-1.5 font-mono text-slate-300">
+                          <span>{conn.useHttps ? 'https://' : 'http://'}{conn.host}:{conn.port}</span>
+                        </div>
+                        {conn.useHttps && (
+                          <div className="flex items-center gap-1 mt-0.5 text-[10px]">
+                            {conn.skipSslVerify ? (
+                              <span className="text-amber-400/90 flex items-center gap-1">
+                                <ShieldAlert className="w-3 h-3" />
+                                <span>Self-Signed / Untrusted CA</span>
+                              </span>
+                            ) : (
+                              <span className="text-emerald-400/90 flex items-center gap-1">
+                                <Shield className="w-3 h-3" />
+                                <span>TLS Verified</span>
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Status */}
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-2">
                           <span className={`w-2 h-2 rounded-full ${
-                            conn.status === 'ONLINE' ? 'bg-emerald-400 shadow-sm shadow-emerald-400' : (conn.status === 'DEGRADED' ? 'bg-amber-400' : 'bg-rose-500')
+                            isOnline 
+                              ? 'bg-emerald-400 shadow-sm shadow-emerald-400' 
+                              : (isDegraded ? 'bg-amber-400' : (isConnecting ? 'bg-cyan-400 animate-pulse' : 'bg-rose-500'))
                           }`} />
                           <span className={`font-mono text-xs font-semibold ${
-                            conn.status === 'ONLINE' ? 'text-emerald-400' : (conn.status === 'DEGRADED' ? 'text-amber-400' : 'text-rose-400')
+                            isOnline ? 'text-emerald-400' : (isDegraded ? 'text-amber-400' : (isConnecting ? 'text-cyan-400' : 'text-rose-400'))
                           }`}>
                             {conn.status}
                           </span>
                         </div>
                         {conn.errorDetails && (
-                          <p className="text-[10px] text-rose-400 truncate max-w-xs mt-0.5">{conn.errorDetails}</p>
+                          <p className="text-[10px] text-rose-400 truncate max-w-xs mt-0.5" title={conn.errorDetails}>
+                            {conn.errorDetails}
+                          </p>
                         )}
                       </td>
 
@@ -227,9 +261,9 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                         {conn.pollIntervalSec}s
                       </td>
 
-                      {/* Last Seen */}
+                      {/* Last Checked / Seen */}
                       <td className="py-4 px-4 font-mono text-slate-400">
-                        {formatRelativeTime(conn.lastSeen || '')}
+                        {formatRelativeTime(conn.lastCheckedAt || conn.lastSeen || '')}
                       </td>
 
                       {/* Action buttons */}
@@ -239,18 +273,29 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
                             id={`btn-test-conn-${conn.id}`}
                             onClick={() => handleTestConnection(conn)}
                             disabled={testingId === conn.id}
-                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-cyan-300 transition-colors"
                             title="Test connectivity & latency"
                           >
                             <Activity className={`w-3.5 h-3.5 ${testingId === conn.id ? 'animate-spin text-cyan-400' : ''}`} />
                           </button>
+
+                          {canManage && (
+                            <button
+                              id={`btn-edit-conn-${conn.id}`}
+                              onClick={() => setConnectionToEdit(conn)}
+                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                              title="Edit connection settings"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
 
                           <button
                             id={`btn-sync-conn-${conn.id}`}
                             onClick={() => handleSyncConnection(conn)}
                             disabled={syncingId === conn.id}
                             className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-                            title="Force immediate telemetry poll"
+                            title="Force immediate poll"
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${syncingId === conn.id ? 'animate-spin text-cyan-400' : ''}`} />
                           </button>
@@ -275,6 +320,19 @@ export const InfrastructureView: React.FC<InfrastructureViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Edit Connection Modal */}
+      {connectionToEdit && (
+        <AddConnectionModal
+          isOpen={Boolean(connectionToEdit)}
+          connectionToEdit={connectionToEdit}
+          onClose={() => setConnectionToEdit(null)}
+          onSuccess={() => {
+            setConnectionToEdit(null);
+            onRefresh();
+          }}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog

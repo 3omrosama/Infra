@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Server, 
   Layers, 
@@ -11,22 +11,29 @@ import {
   AlertCircle, 
   RefreshCw,
   Eye,
-  EyeOff
+  EyeOff,
+  Shield,
+  ShieldAlert,
+  Globe
 } from 'lucide-react';
-import { InfrastructureType, ProviderConnectionConfig } from '../../types/index';
+import { InfrastructureType, ProviderConnectionConfig, InfrastructureConnection } from '../../types/index';
 import { api } from '../../lib/api';
 import { useNotifications } from '../../context/NotificationContext';
 
 interface AddConnectionModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess?: () => void;
+  onCreated?: () => void;
+  connectionToEdit?: InfrastructureConnection | null;
 }
 
 export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   isOpen,
   onClose,
-  onSuccess
+  onSuccess,
+  onCreated,
+  connectionToEdit
 }) => {
   const { showToast } = useNotifications();
   const [type, setType] = useState<InfrastructureType>('ESXI');
@@ -34,7 +41,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   const [host, setHost] = useState('');
   const [port, setPort] = useState('443');
   const [useHttps, setUseHttps] = useState(true);
-  const [skipSslVerify, setSkipSslVerify] = useState(true);
+  const [verifyTls, setVerifyTls] = useState(true); // default true: verify TLS certs
   const [username, setUsername] = useState('root');
   const [password, setPassword] = useState('');
   const [token, setToken] = useState('');
@@ -42,19 +49,53 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   const [pollIntervalSec, setPollIntervalSec] = useState('30');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number; latencyMs?: number; version?: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [duplicateError, setDuplicateError] = useState<{ message: string; existingName?: string } | null>(null);
 
+  const isEditMode = Boolean(connectionToEdit);
+
+  useEffect(() => {
+    if (connectionToEdit) {
+      setType(connectionToEdit.type || 'ESXI');
+      setName(connectionToEdit.name || '');
+      setHost(connectionToEdit.host || '');
+      setPort(String(connectionToEdit.port || (connectionToEdit.useHttps ? 443 : 80)));
+      setUseHttps(connectionToEdit.useHttps ?? true);
+      setVerifyTls(!connectionToEdit.skipSslVerify);
+      setUsername(connectionToEdit.username || 'root');
+      setPassword('');
+      setPollIntervalSec(String(connectionToEdit.pollIntervalSec || 30));
+    } else {
+      setType('ESXI');
+      setName('');
+      setHost('');
+      setPort('443');
+      setUseHttps(true);
+      setVerifyTls(true); // Default: verify TLS certificates
+      setUsername('root');
+      setPassword('');
+      setToken('');
+      setPollIntervalSec('30');
+    }
+    setTestResult(null);
+    setDuplicateError(null);
+    setShowPassword(false);
+  }, [connectionToEdit, isOpen]);
+
   if (!isOpen) return null;
+
+  const notifySuccess = () => {
+    if (onSuccess) onSuccess();
+    if (onCreated) onCreated();
+  };
 
   const handleTypeChange = (selected: InfrastructureType) => {
     setType(selected);
     setTestResult(null);
     setDuplicateError(null);
     if (selected === 'ESXI') {
-      setPort('443');
-      setUseHttps(true);
+      setPort(useHttps ? '443' : '80');
       setUsername('root');
     } else if (selected === 'CASAOS') {
       setPort('80');
@@ -75,9 +116,16 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     }
   };
 
+  const handleProtocolChange = (https: boolean) => {
+    setUseHttps(https);
+    if (type === 'ESXI') {
+      setPort(https ? '443' : '80');
+    }
+  };
+
   const handleTestConnection = async () => {
     if (!host || !port) {
-      showToast('Validation Error', 'Please enter host IP/FQDN and port to test connection', 'WARNING');
+      showToast('Validation Error', 'Please enter a valid Host / IP address and Port', 'WARNING');
       return;
     }
 
@@ -90,7 +138,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
         host,
         port: parseInt(port, 10),
         useHttps,
-        skipSslVerify,
+        skipSslVerify: !verifyTls,
         username,
         password: password || undefined,
         token: token || undefined
@@ -115,7 +163,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !host || !port) {
-      showToast('Validation Error', 'Please fill in the connection name, host IP/FQDN, and port', 'WARNING');
+      showToast('Validation Error', 'Please fill in display name, host/IP, and port', 'WARNING');
       return;
     }
 
@@ -123,21 +171,27 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     setDuplicateError(null);
     try {
       const config: ProviderConnectionConfig = {
-        name,
+        name: name.trim(),
         type,
-        host,
+        host: host.trim(),
         port: parseInt(port, 10),
         useHttps,
-        skipSslVerify,
-        username,
+        skipSslVerify: !verifyTls,
+        username: username.trim(),
         password: password || undefined,
         token: token || undefined,
-        pollIntervalSec: parseInt(pollIntervalSec, 10)
+        pollIntervalSec: parseInt(pollIntervalSec, 10) || 30
       };
 
-      await api.createConnection(config);
-      showToast('Connection Added', `Successfully added and verified node '${name}'`, 'INFO');
-      onSuccess();
+      if (isEditMode && connectionToEdit) {
+        await api.updateConnection(connectionToEdit.id, config);
+        showToast('Connection Updated', `Updated node '${name}'`, 'INFO');
+      } else {
+        await api.createConnection(config);
+        showToast('Connection Added', `Successfully added and verified node '${name}'`, 'INFO');
+      }
+
+      notifySuccess();
       onClose();
     } catch (err: any) {
       if (err.status === 409 || err.code === 'DUPLICATE_CONNECTION') {
@@ -148,7 +202,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
         });
         showToast('Connection Exists', err.message, 'WARNING');
       } else {
-        showToast('Connection Failed', err.message || 'Failed to add connection', 'CRITICAL');
+        showToast(isEditMode ? 'Update Failed' : 'Connection Failed', err.message || 'Failed to save connection', 'CRITICAL');
       }
     } finally {
       setIsSubmitting(false);
@@ -156,26 +210,30 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
       <div 
         id="add-connection-modal"
-        className="w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
       >
         {/* Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white tracking-tight">Connect Infrastructure Node</h3>
-              <p className="text-xs text-slate-400">Add VMware ESXi, CasaOS, Docker, or Proxmox host</p>
+              <h3 className="text-base font-bold text-white tracking-tight">
+                {isEditMode ? `Edit Infrastructure Node (${name || connectionToEdit?.name})` : 'Connect Infrastructure Node'}
+              </h3>
+              <p className="text-xs text-slate-400">
+                {isEditMode ? 'Update credentials and endpoint parameters' : 'Register VMware ESXi hypervisor, CasaOS, Docker, or Proxmox host'}
+              </p>
             </div>
           </div>
           <button 
             id="btn-close-add-connection"
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg"
+            className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -184,41 +242,43 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 flex-1">
           {/* Provider Selection */}
-          <div>
-            <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">
-              Infrastructure Provider Type
-            </label>
-            <div className="grid grid-cols-3 gap-2.5">
-              {[
-                { id: 'ESXI', label: 'VMware ESXi', icon: Server },
-                { id: 'CASAOS', label: 'CasaOS / ZimaOS', icon: Home },
-                { id: 'DOCKER', label: 'Docker Daemon', icon: Boxes },
-                { id: 'PROXMOX', label: 'Proxmox VE', icon: Layers },
-                { id: 'TRUENAS', label: 'TrueNAS CORE/SCALE', icon: Server }
-              ].map(item => {
-                const Icon = item.icon;
-                const isSelected = type === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    id={`btn-select-type-${item.id}`}
-                    onClick={() => handleTypeChange(item.id as InfrastructureType)}
-                    className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-semibold transition-all text-left ${
-                      isSelected
-                        ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-sm'
-                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                );
-              })}
+          {!isEditMode && (
+            <div>
+              <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">
+                Infrastructure Provider Type
+              </label>
+              <div className="grid grid-cols-3 gap-2.5">
+                {[
+                  { id: 'ESXI', label: 'VMware ESXi', icon: Server },
+                  { id: 'CASAOS', label: 'CasaOS / ZimaOS', icon: Home },
+                  { id: 'DOCKER', label: 'Docker Daemon', icon: Boxes },
+                  { id: 'PROXMOX', label: 'Proxmox VE', icon: Layers },
+                  { id: 'TRUENAS', label: 'TrueNAS CORE/SCALE', icon: Server }
+                ].map(item => {
+                  const Icon = item.icon;
+                  const isSelected = type === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      id={`btn-select-type-${item.id}`}
+                      onClick={() => handleTypeChange(item.id as InfrastructureType)}
+                      className={`flex items-center gap-2 p-3 rounded-xl border text-xs font-semibold transition-all text-left ${
+                        isSelected
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-sm'
+                          : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* Node Name */}
+          {/* Node Display Name & Host/IP */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-1.5">
@@ -228,7 +288,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 id="input-conn-name"
                 type="text"
                 required
-                placeholder="e.g. esxi-prod-cluster-01"
+                placeholder={type === 'ESXI' ? 'e.g. esxi-prod-cluster-01' : 'e.g. storage-node-01'}
                 value={name}
                 onChange={e => setName(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500"
@@ -236,22 +296,53 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-1.5">
-                Host IP / FQDN *
+                Host / IP / FQDN *
               </label>
               <input
                 id="input-conn-host"
                 type="text"
                 required
-                placeholder="192.168.1.100 or esxi.internal"
+                placeholder="192.168.1.100 or esxi01.corp.local"
                 value={host}
                 onChange={e => setHost(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500 font-mono"
               />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Accepts IPv4 address, hostname, FQDN, or host:port
+              </p>
             </div>
           </div>
 
-          {/* Network and Ports */}
-          <div className="grid grid-cols-3 gap-4">
+          {/* Protocol & Port & Poll Interval */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-1.5">
+                Protocol
+              </label>
+              <div className="flex rounded-xl bg-slate-950 p-1 border border-slate-700">
+                <button
+                  type="button"
+                  id="btn-protocol-https"
+                  onClick={() => handleProtocolChange(true)}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    useHttps ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  HTTPS
+                </button>
+                <button
+                  type="button"
+                  id="btn-protocol-http"
+                  onClick={() => handleProtocolChange(false)}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    !useHttps ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  HTTP
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-1.5">
                 Port *
@@ -265,6 +356,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500 font-mono"
               />
             </div>
+
             <div>
               <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-1.5">
                 Poll Interval (s)
@@ -279,33 +371,44 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-cyan-500 font-mono"
               />
             </div>
-            <div className="flex flex-col justify-end pb-1 space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={useHttps}
-                  onChange={e => setUseHttps(e.target.checked)}
-                  className="rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900"
-                />
-                <span>Use HTTPS</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={skipSslVerify}
-                  onChange={e => setSkipSslVerify(e.target.checked)}
-                  className="rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900"
-                />
-                <span>Skip SSL Check</span>
-              </label>
-            </div>
           </div>
 
-          {/* Credentials */}
+          {/* TLS Certificate Verification Options */}
+          {useHttps && (
+            <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-start gap-3">
+              <div className="pt-0.5">
+                <input
+                  id="checkbox-verify-tls"
+                  type="checkbox"
+                  checked={verifyTls}
+                  onChange={e => setVerifyTls(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-700 text-cyan-500 focus:ring-0 bg-slate-900 cursor-pointer"
+                />
+              </div>
+              <div className="flex-1">
+                <label htmlFor="checkbox-verify-tls" className="text-xs font-semibold text-slate-200 cursor-pointer flex items-center gap-1.5">
+                  {verifyTls ? (
+                    <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  )}
+                  <span>Verify TLS / SSL Certificate</span>
+                  <span className="text-[10px] text-slate-400 font-normal">(Recommended enabled)</span>
+                </label>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {verifyTls
+                    ? 'Strict certificate validation is enabled. Connection will verify CA chain and hostname.'
+                    : 'Certificate validation is disabled. Required for self-signed ESXi lab certificates.'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Authentication Credentials */}
           <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-4">
             <div className="flex items-center gap-2 text-xs font-bold text-slate-300 uppercase tracking-wider">
               <Lock className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Authentication Credentials (AES-256 Encrypted)</span>
+              <span>Authentication Credentials (AES-256-GCM Encrypted)</span>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -314,7 +417,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 <input
                   id="input-conn-username"
                   type="text"
-                  placeholder="root or admin"
+                  placeholder={type === 'ESXI' ? 'root' : 'admin'}
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500"
@@ -322,18 +425,21 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               </div>
 
               <div>
-                <label className="text-xs text-slate-400 block mb-1">Password</label>
+                <label className="text-xs text-slate-400 block mb-1">
+                  Password {isEditMode && <span className="text-slate-500 font-normal">(Leave blank to keep current)</span>}
+                </label>
                 <div className="relative">
                   <input
                     id="input-conn-password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••••••"
+                    placeholder={isEditMode ? '••••••••••••' : 'ESXi root password'}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500 pr-9"
                   />
                   <button
                     type="button"
+                    id="btn-toggle-show-password"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-2.5 top-2 text-slate-500 hover:text-slate-300"
                   >
@@ -369,7 +475,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onSuccess();
+                      notifySuccess();
                       onClose();
                     }}
                     className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 rounded-lg text-xs font-medium transition-colors"
@@ -390,18 +496,35 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
 
           {/* Test connection result banner */}
           {testResult && (
-            <div className={`p-3 rounded-xl border flex items-center gap-2.5 text-xs ${
-              testResult.success 
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
-                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-            }`}>
-              {testResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
-              <span>{testResult.message}</span>
+            <div 
+              id="test-connection-result-banner"
+              className={`p-3.5 rounded-xl border flex items-start gap-2.5 text-xs ${
+                testResult.success 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+              }`}
+            >
+              {testResult.success ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <span className="font-semibold block mb-0.5">
+                  {testResult.success ? 'Connectivity Verified' : 'Connection Failed'}
+                </span>
+                <span className="text-slate-300 leading-relaxed">{testResult.message}</span>
+                {testResult.latencyMs !== undefined && (
+                  <span className="text-[11px] text-cyan-400 block mt-1 font-mono">
+                    Round-trip Latency: {testResult.latencyMs}ms
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
           {/* Footer Controls */}
-          <div className="pt-2 flex items-center justify-between gap-3">
+          <div className="pt-2 flex items-center justify-between gap-3 border-t border-slate-800">
             <button
               type="button"
               id="btn-test-add-conn"
@@ -412,7 +535,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               {isTesting ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Probing Node...</span>
+                  <span>Testing Connectivity...</span>
                 </>
               ) : (
                 <>
@@ -440,12 +563,12 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 {isSubmitting ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Connecting...</span>
+                    <span>Saving...</span>
                   </>
                 ) : (
                   <>
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Save & Verify Node</span>
+                    <span>{isEditMode ? 'Update Node Configuration' : 'Save & Connect Node'}</span>
                   </>
                 )}
               </button>

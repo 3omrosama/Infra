@@ -301,6 +301,7 @@ export interface AuditLog {
 }
 
 export interface DashboardSummary {
+  hasLiveInfrastructure?: boolean;
   nodes: {
     total: number;
     online: number;
@@ -319,23 +320,23 @@ export interface DashboardSummary {
     stopped: number;
   };
   metrics: {
-    cpuUtilizationPct: number;
-    memoryUtilizationPct: number;
-    storageUtilizationPct: number;
-    networkTrafficRxKbps: number;
-    networkTrafficTxKbps: number;
-    cpuCoresTotal?: number;
-    memoryBytesTotal?: number;
-    memoryBytesUsed?: number;
-    storageBytesTotal?: number;
-    storageBytesUsed?: number;
+    cpuUtilizationPct: number | null;
+    memoryUtilizationPct: number | null;
+    storageUtilizationPct: number | null;
+    networkTrafficRxKbps: number | null;
+    networkTrafficTxKbps: number | null;
+    cpuCoresTotal?: number | null;
+    memoryBytesTotal?: number | null;
+    memoryBytesUsed?: number | null;
+    storageBytesTotal?: number | null;
+    storageBytesUsed?: number | null;
   };
   historicalMetrics: MetricDataPoint[];
   activeAlerts: Alert[];
   recentEvents: SystemEvent[];
   recentAuditLogs: AuditLog[];
   isDemoMode: boolean;
-  healthScore: number;
+  healthScore: number | null;
   lastUpdated: string;
 }
 

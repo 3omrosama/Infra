@@ -639,8 +639,8 @@ export class DataStore {
       networkTxKbps: m.networkTxKbps
     }));
 
-    // If no metrics in DB yet, generate initial baseline
-    if (this.metrics.length === 0) {
+    // If no metrics in DB yet and demoMode is enabled, generate initial baseline
+    if (this.metrics.length === 0 && this.settings.demoMode) {
       this.generateBaselineMetrics();
     }
   }

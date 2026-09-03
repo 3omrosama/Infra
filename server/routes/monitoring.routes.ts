@@ -14,7 +14,19 @@ router.get('/metrics', authenticateToken, (req: AuthenticatedRequest, res: Respo
   else if (range === '24h') sliceCount = 48;
   else if (range === '7d') sliceCount = 168;
 
-  const data = store.metrics.slice(-sliceCount);
+  const isDemo = Boolean(store.settings.demoMode);
+  const liveConnections = Array.from(store.connections.values()).filter(c => isDemo || !c.isDemo);
+  const validConnIds = new Set(liveConnections.map(c => c.id));
+
+  let data: any[] = [];
+  if (isDemo) {
+    data = store.metrics.slice(-sliceCount);
+  } else if (liveConnections.length > 0) {
+    data = store.metrics.filter(m => !m.connectionId || validConnIds.has(m.connectionId)).slice(-sliceCount);
+  } else {
+    data = [];
+  }
+
   res.json({
     range,
     data,

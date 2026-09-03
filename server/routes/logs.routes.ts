@@ -7,7 +7,11 @@ const router = Router();
 // System event logs
 router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
   const { severity, source, search, limit } = req.query;
-  let events = [...store.events];
+  const isDemo = Boolean(store.settings.demoMode);
+  const liveConnections = Array.from(store.connections.values()).filter(c => isDemo || !c.isDemo);
+  const validConnIds = new Set(liveConnections.map(c => c.id));
+
+  let events = store.events.filter(e => isDemo || Boolean(e.connectionId && validConnIds.has(e.connectionId)));
 
   if (severity) {
     events = events.filter(e => e.severity === severity);
@@ -31,7 +35,16 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
 // Security & Management Audit Logs
 router.get('/audit', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
   const { action, username, resourceType, status, search, limit } = req.query;
-  let logs = [...store.auditLogs];
+  const isDemo = Boolean(store.settings.demoMode);
+  const liveConnections = Array.from(store.connections.values()).filter(c => isDemo || !c.isDemo);
+  const validConnIds = new Set(liveConnections.map(c => c.id));
+
+  let logs = store.auditLogs.filter(l => {
+    if (isDemo) return true;
+    if (l.details && l.details.includes('Demo Mode')) return false;
+    if (l.connectionId) return validConnIds.has(l.connectionId);
+    return true;
+  });
 
   if (action) {
     logs = logs.filter(l => l.action.toLowerCase() === String(action).toLowerCase());

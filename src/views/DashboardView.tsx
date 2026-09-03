@@ -70,9 +70,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     tx: Math.round((m.networkTxKbps || 0) / 1000)  // Mbps
   }));
 
-  const healthScore = summary.healthScore ?? 100;
-  const healthColor = healthScore >= 90 ? 'text-emerald-400' : (healthScore >= 70 ? 'text-amber-400' : 'text-rose-400');
-  const healthBg = healthScore >= 90 ? 'bg-emerald-500/10 border-emerald-500/20' : (healthScore >= 70 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-rose-500/10 border-rose-500/20');
+  const hasHealth = summary.healthScore !== null && summary.healthScore !== undefined;
+  const healthScore = summary.healthScore ?? 0;
+  const healthColor = !hasHealth ? 'text-slate-400' : (healthScore >= 90 ? 'text-emerald-400' : (healthScore >= 70 ? 'text-amber-400' : 'text-rose-400'));
+  const healthBg = !hasHealth ? 'bg-slate-900/60 border-slate-800' : (healthScore >= 90 ? 'bg-emerald-500/10 border-emerald-500/20' : (healthScore >= 70 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-rose-500/10 border-rose-500/20'));
   const activeAlerts = summary.activeAlerts || [];
   const recentEvents = summary.recentEvents || [];
   const recentAuditLogs = summary.recentAuditLogs || [];
@@ -86,12 +87,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div>
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Fleet Health Index</p>
             <div className="flex items-baseline gap-2 mt-1">
-              <span className={`text-3xl font-black ${healthColor}`}>{healthScore}%</span>
+              <span className={`text-3xl font-black ${healthColor}`}>{hasHealth ? `${healthScore}%` : 'N/A'}</span>
               <span className="text-xs text-slate-400 font-mono">
-                {healthScore >= 90 ? 'OPTIMAL' : (healthScore >= 70 ? 'DEGRADED' : 'CRITICAL')}
+                {!hasHealth ? 'NO DATA' : (healthScore >= 90 ? 'OPTIMAL' : (healthScore >= 70 ? 'DEGRADED' : 'CRITICAL'))}
               </span>
             </div>
-            <p className="text-[11px] text-slate-500 mt-1">Real-time composite telemetry</p>
+            <p className="text-[11px] text-slate-500 mt-1">{hasHealth ? 'Real-time composite telemetry' : 'No live nodes monitored'}</p>
           </div>
           <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-cyan-400">
             <ShieldCheck className="w-7 h-7" />
@@ -110,7 +111,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-xs text-emerald-400 font-mono font-semibold">{summary.nodes?.online ?? 0} Online</span>
             </div>
             <p className="text-[11px] text-slate-500 mt-1">
-              {(summary.nodes?.offline ?? 0) > 0 ? `${summary.nodes.offline} Offline` : 'All nodes reachable'}
+              {(summary.nodes?.offline ?? 0) > 0 ? `${summary.nodes.offline} Offline` : ((summary.nodes?.total ?? 0) === 0 ? 'No connections registered' : 'All nodes reachable')}
             </p>
           </div>
           <div className="p-3 rounded-xl bg-slate-800/60 group-hover:bg-cyan-500/20 text-slate-400 group-hover:text-cyan-300 transition-colors">
@@ -210,7 +211,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Cluster CPU Load</h3>
             </div>
             <span className="text-xs font-mono font-bold text-cyan-400">
-              {(summary.metrics?.cpuUtilizationPct ?? 0).toFixed(1)}%
+              {summary.metrics?.cpuUtilizationPct !== null && summary.metrics?.cpuUtilizationPct !== undefined
+                ? `${summary.metrics.cpuUtilizationPct.toFixed(1)}%`
+                : 'No Data'}
             </span>
           </div>
 
@@ -219,13 +222,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className={`h-full rounded-full transition-all duration-500 ${
                 (summary.metrics?.cpuUtilizationPct ?? 0) > 80 ? 'bg-rose-500' : ((summary.metrics?.cpuUtilizationPct ?? 0) > 60 ? 'bg-amber-500' : 'bg-cyan-500')
               }`}
-              style={{ width: `${Math.min(100, summary.metrics?.cpuUtilizationPct ?? 0)}%` }}
+              style={{ width: `${summary.metrics?.cpuUtilizationPct !== null && summary.metrics?.cpuUtilizationPct !== undefined ? Math.min(100, Math.max(0, summary.metrics.cpuUtilizationPct)) : 0}%` }}
             />
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
-            <span>{summary.metrics?.cpuCoresTotal ? `Aggregated ${summary.metrics.cpuCoresTotal} Cores` : 'Cores: Dynamic'}</span>
-            <span>Live Telemetry</span>
+            <span>
+              {summary.metrics?.cpuCoresTotal !== null && summary.metrics?.cpuCoresTotal !== undefined
+                ? `Aggregated ${summary.metrics.cpuCoresTotal} Cores`
+                : 'Cores: --'}
+            </span>
+            <span>{summary.hasLiveInfrastructure || summary.isDemoMode ? 'Live Telemetry' : 'No Telemetry'}</span>
           </div>
         </div>
 
@@ -237,7 +244,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Memory Allocation</h3>
             </div>
             <span className="text-xs font-mono font-bold text-emerald-400">
-              {(summary.metrics?.memoryUtilizationPct ?? 0).toFixed(1)}%
+              {summary.metrics?.memoryUtilizationPct !== null && summary.metrics?.memoryUtilizationPct !== undefined
+                ? `${summary.metrics.memoryUtilizationPct.toFixed(1)}%`
+                : 'No Data'}
             </span>
           </div>
 
@@ -246,13 +255,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className={`h-full rounded-full transition-all duration-500 ${
                 (summary.metrics?.memoryUtilizationPct ?? 0) > 85 ? 'bg-rose-500' : ((summary.metrics?.memoryUtilizationPct ?? 0) > 70 ? 'bg-amber-500' : 'bg-emerald-500')
               }`}
-              style={{ width: `${Math.min(100, summary.metrics?.memoryUtilizationPct ?? 0)}%` }}
+              style={{ width: `${summary.metrics?.memoryUtilizationPct !== null && summary.metrics?.memoryUtilizationPct !== undefined ? Math.min(100, Math.max(0, summary.metrics.memoryUtilizationPct)) : 0}%` }}
             />
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
             <span>
-              Used: {summary.metrics?.memoryBytesUsed ? formatBytes(summary.metrics.memoryBytesUsed) : `${(summary.metrics?.memoryUtilizationPct ?? 0).toFixed(1)}%`}
+              Used: {summary.metrics?.memoryBytesUsed ? formatBytes(summary.metrics.memoryBytesUsed) : (summary.metrics?.memoryUtilizationPct !== null && summary.metrics?.memoryUtilizationPct !== undefined ? `${summary.metrics.memoryUtilizationPct.toFixed(1)}%` : '--')}
             </span>
             <span>
               Capacity: {summary.metrics?.memoryBytesTotal ? formatBytes(summary.metrics.memoryBytesTotal) : '--'}
@@ -268,20 +277,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Storage Datastores</h3>
             </div>
             <span className="text-xs font-mono font-bold text-purple-400">
-              {(summary.metrics?.storageUtilizationPct ?? 0).toFixed(1)}%
+              {summary.metrics?.storageUtilizationPct !== null && summary.metrics?.storageUtilizationPct !== undefined
+                ? `${summary.metrics.storageUtilizationPct.toFixed(1)}%`
+                : 'No Data'}
             </span>
           </div>
 
           <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden p-0.5 border border-slate-800">
             <div 
               className="h-full rounded-full bg-purple-500 transition-all duration-500"
-              style={{ width: `${Math.min(100, summary.metrics?.storageUtilizationPct ?? 0)}%` }}
+              style={{ width: `${summary.metrics?.storageUtilizationPct !== null && summary.metrics?.storageUtilizationPct !== undefined ? Math.min(100, Math.max(0, summary.metrics.storageUtilizationPct)) : 0}%` }}
             />
           </div>
 
           <div className="flex justify-between text-[11px] font-mono text-slate-500">
             <span>
-              Used: {summary.metrics?.storageBytesUsed ? formatBytes(summary.metrics.storageBytesUsed) : `${(summary.metrics?.storageUtilizationPct ?? 0).toFixed(1)}%`}
+              Used: {summary.metrics?.storageBytesUsed ? formatBytes(summary.metrics.storageBytesUsed) : (summary.metrics?.storageUtilizationPct !== null && summary.metrics?.storageUtilizationPct !== undefined ? `${summary.metrics.storageUtilizationPct.toFixed(1)}%` : '--')}
             </span>
             <span>
               Capacity: {summary.metrics?.storageBytesTotal ? formatBytes(summary.metrics.storageBytesTotal) : '--'}
@@ -297,7 +308,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-white tracking-tight">Cluster Workload History</h3>
-              <p className="text-xs text-slate-400">CPU and Memory load over last 24 intervals</p>
+              <p className="text-xs text-slate-400">CPU and Memory load timeline</p>
             </div>
             <div className="flex items-center gap-3 text-xs font-mono">
               <span className="flex items-center gap-1.5 text-cyan-400">
@@ -309,20 +320,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} />
-                <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} unit="%" tickLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '11px' }}
-                />
-                <Line type="monotone" dataKey="cpu" stroke="#06b6d4" strokeWidth={2.5} dot={false} name="CPU %" />
-                <Line type="monotone" dataKey="memory" stroke="#10b981" strokeWidth={2.5} dot={false} name="RAM %" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+          {chartData.length === 0 ? (
+            <div className="h-64 w-full flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-xl bg-slate-950/40">
+              <Radio className="w-8 h-8 text-slate-600 mb-2" />
+              <p className="text-xs text-slate-400 font-mono">No telemetry recorded</p>
+              <p className="text-[11px] text-slate-500 mt-1">Connect an infrastructure provider to stream workload history</p>
+            </div>
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} unit="%" tickLine={false} />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '11px' }}
+                  />
+                  <Line type="monotone" dataKey="cpu" stroke="#06b6d4" strokeWidth={2.5} dot={false} name="CPU %" />
+                  <Line type="monotone" dataKey="memory" stroke="#10b981" strokeWidth={2.5} dot={false} name="RAM %" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
         {/* Network Throughput Chart */}
@@ -342,30 +361,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} />
-                <YAxis stroke="#64748b" fontSize={11} unit="M" tickLine={false} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '11px' }}
-                />
-                <Area type="monotone" dataKey="rx" stroke="#3b82f6" fill="url(#rxGrad)" strokeWidth={2} name="Rx (Mbps)" />
-                <Area type="monotone" dataKey="tx" stroke="#a855f7" fill="url(#txGrad)" strokeWidth={2} name="Tx (Mbps)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {chartData.length === 0 ? (
+            <div className="h-64 w-full flex flex-col items-center justify-center border border-dashed border-slate-800 rounded-xl bg-slate-950/40">
+              <Radio className="w-8 h-8 text-slate-600 mb-2" />
+              <p className="text-xs text-slate-400 font-mono">No network telemetry recorded</p>
+              <p className="text-[11px] text-slate-500 mt-1">Connect an infrastructure provider to stream throughput</p>
+            </div>
+          ) : (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#a855f7" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={11} unit="M" tickLine={false} />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#090d16', borderColor: '#334155', borderRadius: '12px', fontSize: '11px' }}
+                  />
+                  <Area type="monotone" dataKey="rx" stroke="#3b82f6" fill="url(#rxGrad)" strokeWidth={2} name="Rx (Mbps)" />
+                  <Area type="monotone" dataKey="tx" stroke="#a855f7" fill="url(#txGrad)" strokeWidth={2} name="Tx (Mbps)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
       </div>
 

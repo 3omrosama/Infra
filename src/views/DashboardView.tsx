@@ -426,8 +426,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {recentEvents.length === 0 ? (
               <p className="py-4 text-center text-xs text-slate-500">No system events logged</p>
             ) : (
-              recentEvents.slice(0, 5).map(event => (
-                <div key={event.id} className="py-2.5 flex items-start gap-3 text-xs">
+              recentEvents.slice(0, 5).map((event, idx) => (
+                <div key={event.id ? `${event.id}-${idx}` : `event-${idx}`} className="py-2.5 flex items-start gap-3 text-xs">
                   <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${
                     event.severity === 'CRITICAL' ? 'bg-rose-500' : (event.severity === 'WARNING' ? 'bg-amber-500' : 'bg-cyan-500')
                   }`} />
@@ -460,8 +460,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {recentAuditLogs.length === 0 ? (
               <p className="py-4 text-center text-xs text-slate-500">No recent audit logs</p>
             ) : (
-              recentAuditLogs.slice(0, 5).map(log => (
-                <div key={log.id} className="py-2.5 flex items-start gap-3 text-xs">
+              recentAuditLogs.slice(0, 5).map((log, idx) => (
+                <div key={log.id ? `${log.id}-${idx}` : `audit-${idx}`} className="py-2.5 flex items-start gap-3 text-xs">
                   <div className="w-6 h-6 rounded-lg bg-slate-800 flex items-center justify-center font-bold text-[10px] text-cyan-400 uppercase shrink-0 mt-0.5">
                     {log.username?.substring(0, 2) || 'OP'}
                   </div>

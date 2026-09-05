@@ -354,22 +354,33 @@ model Network {
 }
 
 model Metric {
-  id            String                    @id @default(uuid())
-  connectionId  String?
-  connection    InfrastructureConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  resourceType  ResourceType?
-  resourceId    String?                   // hostId, vmId, containerId
-  resourceName  String?
-  cpuPct        Float
-  memoryPct     Float
-  storagePct    Float?
-  networkRxKbps Float                     @default(0)
-  networkTxKbps Float                     @default(0)
-  timestamp     DateTime                  @default(now())
+  id                String                    @id @default(uuid())
+  connectionId      String?
+  connection        InfrastructureConnection? @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  hostId            String?
+  resourceType      ResourceType?
+  resourceId        String?                   // hostId, vmId, containerId
+  resourceName      String?
+  cpuPct            Float
+  cpuCoresTotal     Int?
+  memoryUsedBytes   BigInt?
+  memoryTotalBytes  BigInt?
+  memoryPct         Float
+  storageUsedBytes  BigInt?
+  storageTotalBytes BigInt?
+  storagePct        Float?
+  networkRxKbps     Float                     @default(0)
+  networkTxKbps     Float                     @default(0)
+  uptimeSeconds     BigInt?
+  latencyMs         Int?
+  timestamp         DateTime                  @default(now())
 
-  @@index([connectionId, timestamp])
-  @@index([resourceId, timestamp])
+  @@index([connectionId])
+  @@index([hostId])
   @@index([timestamp])
+  @@index([connectionId, timestamp])
+  @@index([timestamp, connectionId])
+  @@index([resourceId, timestamp])
 }
 
 model AlertRule {

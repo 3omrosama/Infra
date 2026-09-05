@@ -42,8 +42,30 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            if (data.type === 'METRICS_UPDATE' && data.data) {
-              setLatestMetric(data.data);
+            if ((data.type === 'METRICS_UPDATE' || data.type === 'telemetry.updated' || data.type === 'METRICS_AGGREGATE') && data.data) {
+              const d = data.data;
+              if (d.cpu && typeof d.cpu === 'object') {
+                setLatestMetric({
+                  id: d.id,
+                  connectionId: data.connectionId || d.connectionId,
+                  hostId: d.hostId,
+                  timestamp: d.timestamp,
+                  cpu: d.cpu.utilizationPct,
+                  cpuCoresTotal: d.cpu.coresTotal,
+                  memory: d.memory.utilizationPct,
+                  memoryBytesUsed: d.memory.usedBytes,
+                  memoryBytesTotal: d.memory.totalBytes,
+                  storage: d.storage.utilizationPct,
+                  storageBytesUsed: d.storage.usedBytes,
+                  storageBytesTotal: d.storage.totalBytes,
+                  networkRxKbps: d.network?.rxKbps || 0,
+                  networkTxKbps: d.network?.txKbps || 0,
+                  uptimeSeconds: d.uptimeSeconds,
+                  latencyMs: d.latencyMs
+                });
+              } else {
+                setLatestMetric(d);
+              }
               setLastTelemetryTimestamp(data.timestamp || new Date().toISOString());
             } else if (data.type === 'ALERT_TRIGGERED' && data.data) {
               setAlerts(prev => [...prev, data.data]);

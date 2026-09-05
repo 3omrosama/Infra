@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { store } from './server/db/store.js';
 import { setupWebSocket } from './server/websocket.js';
 import { monitoringPoller } from './server/monitoring/poller.js';
+import { esxiSoapDaemon } from './server/services/esxiSoapDaemon.js';
 
 // Route imports
 import authRoutes from './server/routes/auth.routes.js';
@@ -40,6 +41,9 @@ async function startServer() {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     next();
   });
+
+  // Start internal ESXi VMware vSphere SOAP daemon for real end-to-end telemetry testing
+  await esxiSoapDaemon.start().catch(err => console.error('[ESXiSoapDaemon] start error:', err));
 
   // Initialize DB store and seed default state
   await store.init();

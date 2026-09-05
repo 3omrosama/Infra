@@ -5,11 +5,11 @@ import { DashboardSummary, MetricDataPoint } from '../../src/types/index.js';
 
 const router = Router();
 
-router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) => {
+router.get('/', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
   const isDemo = Boolean(store.settings.demoMode);
 
-  // In Live Mode (isDemo === false), strictly filter out demo nodes and synthetic items
-  const connections = Array.from(store.connections.values()).filter(c => isDemo || !c.isDemo);
+  // In Live Mode (isDemo === false), strictly filter out demo nodes and disabled connections
+  const connections = Array.from(store.connections.values()).filter(c => isDemo ? true : (!c.isDemo && c.isEnabled !== false));
   const validConnIds = new Set(connections.map(c => c.id));
 
   const totalNodes = connections.length;
@@ -138,19 +138,25 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
       const liveHistory = store.metrics.filter(m => m.connectionId && validConnIds.has(m.connectionId));
       if (liveHistory.length > 0) {
         historicalMetrics = liveHistory.slice(-30);
-      } else if (cpuUtilizationPct !== null) {
-        historicalMetrics = [
-          {
-            timestamp: new Date().toISOString(),
-            cpu: cpuUtilizationPct,
-            memory: memoryUtilizationPct || 0,
-            storage: storageUtilizationPct || 0,
-            networkRxKbps: networkTrafficRxKbps || 0,
-            networkTxKbps: networkTrafficTxKbps || 0
-          }
-        ];
       } else {
-        historicalMetrics = [];
+        const dbHistory = await store.getTelemetryHistory(undefined, '24h');
+        const validDbHistory = dbHistory.filter(m => m.connectionId && validConnIds.has(m.connectionId));
+        if (validDbHistory.length > 0) {
+          historicalMetrics = validDbHistory.slice(-30);
+        } else if (cpuUtilizationPct !== null) {
+          historicalMetrics = [
+            {
+              timestamp: new Date().toISOString(),
+              cpu: cpuUtilizationPct,
+              memory: memoryUtilizationPct || 0,
+              storage: storageUtilizationPct || 0,
+              networkRxKbps: networkTrafficRxKbps || 0,
+              networkTxKbps: networkTrafficTxKbps || 0
+            }
+          ];
+        } else {
+          historicalMetrics = [];
+        }
       }
 
       // Calculate infrastructure Health Score for live mode
@@ -185,16 +191,28 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   // Recent system events in current scope: in live mode, strictly require matching live connectionId
+  const seenEventIds = new Set<string>();
   const recentEvents = store.events
     .filter(e => isDemo ? true : Boolean(e.connectionId && validConnIds.has(e.connectionId)))
+    .filter(e => {
+      if (seenEventIds.has(e.id)) return false;
+      seenEventIds.add(e.id);
+      return true;
+    })
     .slice(0, 8);
 
   // Recent audit logs in current scope: in live mode, exclude demo-specific logs and filter connectionId if present
+  const seenLogIds = new Set<string>();
   const recentAuditLogs = store.auditLogs
     .filter(l => {
       if (isDemo) return true;
       if (l.details && l.details.includes('Demo Mode')) return false;
       if (l.connectionId) return validConnIds.has(l.connectionId);
+      return true;
+    })
+    .filter(l => {
+      if (seenLogIds.has(l.id)) return false;
+      seenLogIds.add(l.id);
       return true;
     })
     .slice(0, 8);

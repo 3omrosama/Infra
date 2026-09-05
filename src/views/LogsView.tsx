@@ -108,13 +108,13 @@ export const LogsView: React.FC = () => {
           {events.length === 0 ? (
             <div className="py-12 text-center text-slate-600">No log records found</div>
           ) : (
-            events.map(event => {
+            events.map((event, idx) => {
               let sevColor = 'text-cyan-400';
               if (event.severity === 'CRITICAL') sevColor = 'text-rose-400 font-bold';
               if (event.severity === 'WARNING') sevColor = 'text-amber-400 font-bold';
 
               return (
-                <div key={event.id} className="flex items-start gap-3 hover:bg-slate-900/60 p-1.5 rounded transition-colors">
+                <div key={event.id ? `${event.id}-${idx}` : `log-${idx}`} className="flex items-start gap-3 hover:bg-slate-900/60 p-1.5 rounded transition-colors">
                   <span className="text-slate-500 shrink-0">
                     {new Date(event.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
                   </span>

@@ -65,8 +65,8 @@ export const TasksView: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                logs.map(log => (
-                  <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
+                logs.map((log, idx) => (
+                  <tr key={log.id ? `${log.id}-${idx}` : `log-${idx}`} className="hover:bg-slate-800/40 transition-colors">
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
                         <div className="w-6 h-6 rounded-lg bg-cyan-600/20 text-cyan-400 font-bold flex items-center justify-center text-[10px] uppercase">

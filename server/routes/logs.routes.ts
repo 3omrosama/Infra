@@ -29,7 +29,13 @@ router.get('/', authenticateToken, (req: AuthenticatedRequest, res: Response) =>
   }
 
   const max = limit ? parseInt(String(limit), 10) : 100;
-  res.json(events.slice(0, max));
+  const seenEventIds = new Set<string>();
+  const uniqueEvents = events.filter(e => {
+    if (seenEventIds.has(e.id)) return false;
+    seenEventIds.add(e.id);
+    return true;
+  });
+  res.json(uniqueEvents.slice(0, max));
 });
 
 // Security & Management Audit Logs
@@ -68,7 +74,13 @@ router.get('/audit', authenticateToken, (req: AuthenticatedRequest, res: Respons
   }
 
   const max = limit ? parseInt(String(limit), 10) : 100;
-  res.json(logs.slice(0, max));
+  const seenLogIds = new Set<string>();
+  const uniqueLogs = logs.filter(l => {
+    if (seenLogIds.has(l.id)) return false;
+    seenLogIds.add(l.id);
+    return true;
+  });
+  res.json(uniqueLogs.slice(0, max));
 });
 
 export default router;

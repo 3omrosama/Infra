@@ -222,13 +222,65 @@ export interface DockerVolume {
 }
 
 export interface MetricDataPoint {
+  id?: string;
   connectionId?: string;
+  hostId?: string;
   timestamp: string;
   cpu: number;
+  cpuCoresTotal?: number | null;
   memory: number;
+  memoryBytesUsed?: number | null;
+  memoryBytesTotal?: number | null;
   storage: number;
+  storageBytesUsed?: number | null;
+  storageBytesTotal?: number | null;
   networkRxKbps: number;
   networkTxKbps: number;
+  uptimeSeconds?: number | null;
+  latencyMs?: number | null;
+}
+
+export interface NormalizedTelemetry {
+  id: string;
+  connectionId: string;
+  timestamp: string;
+  hostId?: string;
+  cpu: {
+    utilizationPct: number;
+    coresTotal: number;
+  };
+  memory: {
+    usedBytes: number;
+    totalBytes: number;
+    utilizationPct: number;
+  };
+  storage: {
+    usedBytes: number;
+    totalBytes: number;
+    utilizationPct: number;
+  };
+  network: {
+    rxBytesPerSec: number | null;
+    txBytesPerSec: number | null;
+    rxKbps: number | null;
+    txKbps: number | null;
+  };
+  vms?: {
+    total: number;
+    running: number;
+    stopped: number;
+    suspended: number;
+  };
+  datastores?: {
+    name: string;
+    capacityBytes: number;
+    freeBytes: number;
+    usedBytes: number;
+    usagePct: number;
+  }[];
+  uptimeSeconds: number;
+  latencyMs: number;
+  status: 'ONLINE' | 'DEGRADED' | 'OFFLINE';
 }
 
 export interface AlertRule {

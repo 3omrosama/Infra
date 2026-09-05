@@ -40,7 +40,7 @@ export function setupWebSocket(server: Server) {
   console.log('[WebSocket] Real-time event server listening on /ws');
 }
 
-export function broadcastToAll(payload: { type: string; data?: any; message?: string }) {
+export function broadcastToAll(payload: { type: string; data?: any; message?: string; connectionId?: string; timestamp?: string }) {
   if (!wss || clients.size === 0) return;
 
   const dataStr = JSON.stringify({

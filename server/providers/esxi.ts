@@ -7,6 +7,7 @@ import {
   DatastoreInfo, 
   NetworkInfo, 
   MetricDataPoint, 
+  NormalizedTelemetry,
   SystemEvent,
   PowerState
 } from '../../src/types/index.js';
@@ -149,7 +150,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
   /**
    * Discover and parse all Hypervisor Hosts (HostSystem) from ESXi
    */
-  async getHosts(): Promise<ESXiHost[]> {
+  async getHosts(isRetry = false): Promise<ESXiHost[]> {
     await this.ensureSession();
 
     let containerViewId: string | null = null;
@@ -275,7 +276,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
           hostname: hostName,
           ipAddress: this.config.host,
           version: product.fullName || `VMware ESXi ${product.version || '8.0'}`,
-          build: product.build || '',
+          build: product.build != null ? String(product.build) : '',
           cpuModel,
           cpuCores,
           cpuMhzTotal,
@@ -296,6 +297,15 @@ export class ESXiProvider extends BaseInfrastructureProvider {
 
       return hosts;
     } catch (err: any) {
+      if (!isRetry && (err.message?.includes('Authentication') || err.message?.includes('NotAuthenticated') || err.message?.includes('session'))) {
+        console.warn(`[ESXiProvider] Session expired during getHosts on ${this.config.host}, re-authenticating...`);
+        try {
+          await this.ensureSession(true);
+          return await this.getHosts(true);
+        } catch (retryErr: any) {
+          console.error(`[ESXiProvider] Retry failed on ${this.config.host}:`, retryErr.message);
+        }
+      }
       console.error(`[ESXiProvider] Failed to query hosts on ${this.config.host}:`, err.message);
       this.lastError = err.message;
       return [];
@@ -309,7 +319,7 @@ export class ESXiProvider extends BaseInfrastructureProvider {
   /**
    * Discover and parse all Virtual Machines from ESXi
    */
-  async getVirtualMachines(): Promise<VirtualMachine[]> {
+  async getVirtualMachines(isRetry = false): Promise<VirtualMachine[]> {
     await this.ensureSession();
 
     let containerViewId: string | null = null;
@@ -391,6 +401,15 @@ export class ESXiProvider extends BaseInfrastructureProvider {
 
       return vms;
     } catch (err: any) {
+      if (!isRetry && (err.message?.includes('Authentication') || err.message?.includes('NotAuthenticated') || err.message?.includes('session'))) {
+        console.warn(`[ESXiProvider] Session expired during getVirtualMachines on ${this.config.host}, re-authenticating...`);
+        try {
+          await this.ensureSession(true);
+          return await this.getVirtualMachines(true);
+        } catch (retryErr: any) {
+          console.error(`[ESXiProvider] Retry failed on ${this.config.host}:`, retryErr.message);
+        }
+      }
       console.error(`[ESXiProvider] Failed to query VMs on ${this.config.host}:`, err.message);
       this.lastError = err.message;
       return [];
@@ -411,11 +430,152 @@ export class ESXiProvider extends BaseInfrastructureProvider {
     return hosts.flatMap(h => h.networks);
   }
 
-  async getMetrics(): Promise<MetricDataPoint> {
-    const hosts = await this.getHosts();
+  /**
+   * Real, normalized telemetry collection pipeline for ESXi
+   */
+  async getNormalizedTelemetry(): Promise<NormalizedTelemetry> {
+    const startTime = Date.now();
+    await this.ensureSession();
+
+    let hosts = await this.getHosts();
     if (hosts.length === 0) {
+      // Auto re-authenticate and retry once
+      await this.ensureSession(true);
+      hosts = await this.getHosts(true);
+    }
+
+    let vms: VirtualMachine[] = [];
+    try {
+      vms = await this.getVirtualMachines();
+    } catch (vmErr: any) {
+      console.warn(`[ESXiProvider] VM query notice on ${this.config.host}:`, vmErr.message);
+    }
+
+    const latencyMs = Date.now() - startTime;
+    const primaryHost = hosts[0];
+
+    if (!primaryHost) {
+      throw new Error(`No ESXi host system returned from endpoint ${this.config.host}`);
+    }
+
+    // Host telemetry
+    const cpuUtilizationPct = primaryHost.cpuUsagePct ?? 0;
+    const cpuCoresTotal = primaryHost.cpuCores ?? 1;
+
+    const memoryBytesTotal = primaryHost.memoryBytesTotal ?? 0;
+    const memoryBytesUsed = primaryHost.memoryUsagePct
+      ? Math.round((memoryBytesTotal * primaryHost.memoryUsagePct) / 100)
+      : 0;
+    const memoryUtilizationPct = primaryHost.memoryUsagePct ?? 0;
+
+    // Datastores telemetry
+    const datastores = (primaryHost.datastores || []).map(ds => ({
+      name: ds.name,
+      capacityBytes: ds.capacityBytes,
+      freeBytes: ds.freeBytes,
+      usedBytes: Math.max(0, ds.capacityBytes - ds.freeBytes),
+      usagePct: ds.usagePct
+    }));
+
+    const storageBytesTotal = datastores.reduce((acc, d) => acc + d.capacityBytes, 0);
+    const storageBytesUsed = datastores.reduce((acc, d) => acc + d.usedBytes, 0);
+    const storageUtilizationPct = storageBytesTotal > 0
+      ? Math.round(((storageBytesUsed / storageBytesTotal) * 100) * 10) / 10
+      : 0;
+
+    // Network throughput telemetry
+    let rxKbps: number | null = null;
+    let txKbps: number | null = null;
+    let rxBytesPerSec: number | null = null;
+    let txBytesPerSec: number | null = null;
+
+    let hasNetworkStats = false;
+    for (const net of primaryHost.networks || []) {
+      if (net.rxBytesPerSec || net.txBytesPerSec) {
+        hasNetworkStats = true;
+        rxBytesPerSec = (rxBytesPerSec || 0) + (net.rxBytesPerSec || 0);
+        txBytesPerSec = (txBytesPerSec || 0) + (net.txBytesPerSec || 0);
+      }
+    }
+    if (hasNetworkStats) {
+      rxKbps = Math.round(((rxBytesPerSec || 0) * 8) / 1024);
+      txKbps = Math.round(((txBytesPerSec || 0) * 8) / 1024);
+    } else {
+      console.log(`[ESXiProvider] Host real-time network throughput counters not exposed by HostSystem quickStats on ${primaryHost.hostname}; omitting.`);
+    }
+
+    // VM inventory counts
+    const totalVms = vms.length;
+    const runningVms = vms.filter(v => v.powerState === 'RUNNING').length;
+    const stoppedVms = vms.filter(v => v.powerState === 'STOPPED').length;
+    const suspendedVms = vms.filter(v => v.powerState === 'SUSPENDED').length;
+
+    const normalized: NormalizedTelemetry = {
+      id: `tel-${this.config.id || 'esxi'}-${Date.now().toString(36)}`,
+      connectionId: this.config.id || '',
+      hostId: primaryHost.id,
+      timestamp: new Date().toISOString(),
+      cpu: {
+        utilizationPct: cpuUtilizationPct,
+        coresTotal: cpuCoresTotal
+      },
+      memory: {
+        usedBytes: memoryBytesUsed,
+        totalBytes: memoryBytesTotal,
+        utilizationPct: memoryUtilizationPct
+      },
+      storage: {
+        usedBytes: storageBytesUsed,
+        totalBytes: storageBytesTotal,
+        utilizationPct: storageUtilizationPct
+      },
+      network: {
+        rxBytesPerSec,
+        txBytesPerSec,
+        rxKbps,
+        txKbps
+      },
+      vms: {
+        total: totalVms,
+        running: runningVms,
+        stopped: stoppedVms,
+        suspended: suspendedVms
+      },
+      datastores,
+      uptimeSeconds: primaryHost.uptimeSeconds || 0,
+      latencyMs,
+      status: 'ONLINE'
+    };
+
+    return normalized;
+  }
+
+  async getMetrics(): Promise<MetricDataPoint> {
+    try {
+      const tel = await this.getNormalizedTelemetry();
+      return {
+        id: tel.id,
+        connectionId: tel.connectionId,
+        hostId: tel.hostId,
+        timestamp: tel.timestamp,
+        cpu: tel.cpu.utilizationPct,
+        cpuCoresTotal: tel.cpu.coresTotal,
+        memory: tel.memory.utilizationPct,
+        memoryBytesUsed: tel.memory.usedBytes,
+        memoryBytesTotal: tel.memory.totalBytes,
+        storage: tel.storage.utilizationPct,
+        storageBytesUsed: tel.storage.usedBytes,
+        storageBytesTotal: tel.storage.totalBytes,
+        networkRxKbps: tel.network.rxKbps || 0,
+        networkTxKbps: tel.network.txKbps || 0,
+        uptimeSeconds: tel.uptimeSeconds,
+        latencyMs: tel.latencyMs
+      };
+    } catch (err: any) {
+      console.warn(`[ESXiProvider] Fallback metrics on ${this.config.host}:`, err.message);
       return {
         timestamp: new Date().toISOString(),
+        connectionId: this.config.id,
         cpu: 0,
         memory: 0,
         storage: 0,
@@ -423,19 +583,6 @@ export class ESXiProvider extends BaseInfrastructureProvider {
         networkTxKbps: 0
       };
     }
-
-    const avgCpu = Math.round((hosts.reduce((acc, h) => acc + h.cpuUsagePct, 0) / hosts.length) * 10) / 10;
-    const avgMem = Math.round((hosts.reduce((acc, h) => acc + h.memoryUsagePct, 0) / hosts.length) * 10) / 10;
-    const avgStorage = Math.round((hosts.reduce((acc, h) => acc + h.storageUsagePct, 0) / hosts.length) * 10) / 10;
-
-    return {
-      timestamp: new Date().toISOString(),
-      cpu: avgCpu,
-      memory: avgMem,
-      storage: avgStorage,
-      networkRxKbps: 0,
-      networkTxKbps: 0
-    };
   }
 
   async getEvents(): Promise<SystemEvent[]> {

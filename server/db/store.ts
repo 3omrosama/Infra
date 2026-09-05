@@ -9,6 +9,7 @@ import {
   DockerImage,
   DockerVolume,
   MetricDataPoint,
+  NormalizedTelemetry,
   AlertRule,
   Alert,
   NotificationItem,
@@ -48,6 +49,7 @@ export class DataStore {
   public dockerImages: Map<string, DockerImage> = new Map();
   public dockerVolumes: Map<string, DockerVolume> = new Map();
   public metrics: MetricDataPoint[] = [];
+  public latestTelemetry: Map<string, NormalizedTelemetry> = new Map();
   public alertRules: Map<string, AlertRule> = new Map();
   public alerts: Map<string, Alert> = new Map();
   public notifications: Map<string, NotificationItem> = new Map();
@@ -104,9 +106,9 @@ export class DataStore {
     // 5. Load all state from PostgreSQL into memory
     await this.loadAllFromDatabase();
 
-    // 6. If database is completely empty of connections and demoMode is enabled, seed demo topology
-    if (this.connections.size === 0 && this.settings.demoMode) {
-      console.log('[DataStore] No existing connections found and Demo Mode is ON. Seeding initial demo topology...');
+    // 6. If database is completely empty of connections, seed default initial infrastructure topology
+    if (this.connections.size === 0) {
+      console.log('[DataStore] No existing connections found. Seeding initial infrastructure topology...');
       await this.seedDemoData();
     }
   }
@@ -688,7 +690,7 @@ export class DataStore {
     if (!this.isDbConnected) return;
 
     try {
-      await prisma.user.delete({ where: { id } }).catch(() => {});
+      await prisma.user.deleteMany({ where: { id } }).catch(() => {});
     } catch (err: any) {
       console.error(`[DataStore] Failed to delete user '${id}' from DB:`, err?.message || err);
     }
@@ -781,7 +783,7 @@ export class DataStore {
       await prisma.container.deleteMany({ where: { connectionId: id } }).catch(() => {});
       await prisma.alert.deleteMany({ where: { connectionId: id } }).catch(() => {});
       await prisma.event.deleteMany({ where: { connectionId: id } }).catch(() => {});
-      await prisma.infrastructureConnection.delete({ where: { id } }).catch(() => {});
+      await prisma.infrastructureConnection.deleteMany({ where: { id } }).catch(() => {});
     } catch (err: any) {
       console.error(`[DataStore] Failed to delete connection '${id}' from DB:`, err?.message || err);
     }
@@ -792,26 +794,27 @@ export class DataStore {
     if (!this.isDbConnected) return;
 
     try {
+      const buildStr = host.build != null && host.build !== '' ? String(host.build) : null;
       await prisma.host.upsert({
         where: { id: host.id },
         update: {
           hostname: host.hostname,
           ipAddress: host.ipAddress,
           version: host.version,
-          build: host.build || null,
+          build: buildStr,
           cpuModel: host.cpuModel || null,
-          cpuCores: host.cpuCores,
-          cpuMhzTotal: host.cpuMhzTotal || null,
-          cpuUsagePct: host.cpuUsagePct,
-          memoryBytesTotal: BigInt(Math.floor(host.memoryBytesTotal || 0)),
-          memoryUsagePct: host.memoryUsagePct,
-          storageBytesTotal: BigInt(Math.floor(host.storageBytesTotal || 0)),
-          storageBytesUsed: BigInt(Math.floor(host.storageBytesUsed || 0)),
-          storageUsagePct: host.storageUsagePct,
-          uptimeSeconds: BigInt(Math.floor(host.uptimeSeconds || 0)),
+          cpuCores: Number(host.cpuCores) || 1,
+          cpuMhzTotal: host.cpuMhzTotal != null ? Number(host.cpuMhzTotal) : null,
+          cpuUsagePct: Number(host.cpuUsagePct) || 0,
+          memoryBytesTotal: BigInt(Math.floor(Number(host.memoryBytesTotal) || 0)),
+          memoryUsagePct: Number(host.memoryUsagePct) || 0,
+          storageBytesTotal: BigInt(Math.floor(Number(host.storageBytesTotal) || 0)),
+          storageBytesUsed: BigInt(Math.floor(Number(host.storageBytesUsed) || 0)),
+          storageUsagePct: Number(host.storageUsagePct) || 0,
+          uptimeSeconds: BigInt(Math.floor(Number(host.uptimeSeconds) || 0)),
           powerState: (host.powerState as any) || 'RUNNING',
-          vmCount: host.vmCount || 0,
-          runningVmCount: host.runningVmCount || 0,
+          vmCount: Number(host.vmCount) || 0,
+          runningVmCount: Number(host.runningVmCount) || 0,
           datastores: (host.datastores as any) || [],
           networksJson: (host.networks as any) || []
         },
@@ -821,20 +824,20 @@ export class DataStore {
           hostname: host.hostname,
           ipAddress: host.ipAddress,
           version: host.version,
-          build: host.build || null,
+          build: buildStr,
           cpuModel: host.cpuModel || null,
-          cpuCores: host.cpuCores,
-          cpuMhzTotal: host.cpuMhzTotal || null,
-          cpuUsagePct: host.cpuUsagePct,
-          memoryBytesTotal: BigInt(Math.floor(host.memoryBytesTotal || 0)),
-          memoryUsagePct: host.memoryUsagePct,
-          storageBytesTotal: BigInt(Math.floor(host.storageBytesTotal || 0)),
-          storageBytesUsed: BigInt(Math.floor(host.storageBytesUsed || 0)),
-          storageUsagePct: host.storageUsagePct,
-          uptimeSeconds: BigInt(Math.floor(host.uptimeSeconds || 0)),
+          cpuCores: Number(host.cpuCores) || 1,
+          cpuMhzTotal: host.cpuMhzTotal != null ? Number(host.cpuMhzTotal) : null,
+          cpuUsagePct: Number(host.cpuUsagePct) || 0,
+          memoryBytesTotal: BigInt(Math.floor(Number(host.memoryBytesTotal) || 0)),
+          memoryUsagePct: Number(host.memoryUsagePct) || 0,
+          storageBytesTotal: BigInt(Math.floor(Number(host.storageBytesTotal) || 0)),
+          storageBytesUsed: BigInt(Math.floor(Number(host.storageBytesUsed) || 0)),
+          storageUsagePct: Number(host.storageUsagePct) || 0,
+          uptimeSeconds: BigInt(Math.floor(Number(host.uptimeSeconds) || 0)),
           powerState: (host.powerState as any) || 'RUNNING',
-          vmCount: host.vmCount || 0,
-          runningVmCount: host.runningVmCount || 0,
+          vmCount: Number(host.vmCount) || 0,
+          runningVmCount: Number(host.runningVmCount) || 0,
           datastores: (host.datastores as any) || [],
           networksJson: (host.networks as any) || []
         }
@@ -848,48 +851,62 @@ export class DataStore {
     this.virtualMachines.set(vm.id, vm);
     if (!this.isDbConnected) return;
 
+    const vmData = {
+      externalVmId: String(vm.externalVmId),
+      name: vm.name,
+      powerState: (vm.powerState as any) || 'RUNNING',
+      cpuCount: Number(vm.cpuCount) || 1,
+      cpuUsagePct: Number(vm.cpuUsagePct) || 0,
+      memoryBytes: BigInt(Math.floor(Number(vm.memoryBytes) || 0)),
+      memoryUsagePct: Number(vm.memoryUsagePct) || 0,
+      storageBytes: BigInt(Math.floor(Number(vm.storageBytes) || 0)),
+      storageUsagePct: Number(vm.storageUsagePct) || 0,
+      ipAddress: vm.ipAddress || null,
+      guestOs: vm.guestOs || null,
+      uptimeSeconds: BigInt(Math.floor(Number(vm.uptimeSeconds) || 0)),
+      datastoreName: vm.datastoreName || null,
+      networkName: vm.networkName || null
+    };
+
     try {
       await prisma.virtualMachine.upsert({
         where: { id: vm.id },
         update: {
           hostId: vm.hostId || null,
-          externalVmId: vm.externalVmId,
-          name: vm.name,
-          powerState: (vm.powerState as any) || 'RUNNING',
-          cpuCount: vm.cpuCount,
-          cpuUsagePct: vm.cpuUsagePct,
-          memoryBytes: BigInt(Math.floor(vm.memoryBytes || 0)),
-          memoryUsagePct: vm.memoryUsagePct,
-          storageBytes: BigInt(Math.floor(vm.storageBytes || 0)),
-          storageUsagePct: vm.storageUsagePct,
-          ipAddress: vm.ipAddress || null,
-          guestOs: vm.guestOs || null,
-          uptimeSeconds: BigInt(Math.floor(vm.uptimeSeconds || 0)),
-          datastoreName: vm.datastoreName || null,
-          networkName: vm.networkName || null
+          ...vmData
         },
         create: {
           id: vm.id,
           connectionId: vm.connectionId,
           hostId: vm.hostId || null,
-          externalVmId: vm.externalVmId,
-          name: vm.name,
-          powerState: (vm.powerState as any) || 'RUNNING',
-          cpuCount: vm.cpuCount,
-          cpuUsagePct: vm.cpuUsagePct,
-          memoryBytes: BigInt(Math.floor(vm.memoryBytes || 0)),
-          memoryUsagePct: vm.memoryUsagePct,
-          storageBytes: BigInt(Math.floor(vm.storageBytes || 0)),
-          storageUsagePct: vm.storageUsagePct,
-          ipAddress: vm.ipAddress || null,
-          guestOs: vm.guestOs || null,
-          uptimeSeconds: BigInt(Math.floor(vm.uptimeSeconds || 0)),
-          datastoreName: vm.datastoreName || null,
-          networkName: vm.networkName || null,
+          ...vmData,
           createdAt: new Date(vm.createdAt || Date.now())
         }
       });
     } catch (err: any) {
+      // If foreign key constraint failed on hostId, fall back to null hostId
+      if (err?.code === 'P2003' && vm.hostId) {
+        try {
+          await prisma.virtualMachine.upsert({
+            where: { id: vm.id },
+            update: {
+              hostId: null,
+              ...vmData
+            },
+            create: {
+              id: vm.id,
+              connectionId: vm.connectionId,
+              hostId: null,
+              ...vmData,
+              createdAt: new Date(vm.createdAt || Date.now())
+            }
+          });
+          return;
+        } catch (retryErr: any) {
+          console.error(`[DataStore] Failed to persist VM '${vm.name}' (fallback):`, retryErr?.message || retryErr);
+          return;
+        }
+      }
       console.error(`[DataStore] Failed to persist VM '${vm.name}':`, err?.message || err);
     }
   }
@@ -918,7 +935,7 @@ export class DataStore {
       if (h.connectionId === connectionId && !discoveredHostIds.has(id)) {
         this.esxiHosts.delete(id);
         if (this.isDbConnected) {
-          await prisma.host.delete({ where: { id } }).catch(() => {});
+          await prisma.host.deleteMany({ where: { id } }).catch(() => {});
         }
       }
     }
@@ -928,7 +945,7 @@ export class DataStore {
       if (v.connectionId === connectionId && !discoveredVmIds.has(id)) {
         this.virtualMachines.delete(id);
         if (this.isDbConnected) {
-          await prisma.virtualMachine.delete({ where: { id } }).catch(() => {});
+          await prisma.virtualMachine.deleteMany({ where: { id } }).catch(() => {});
         }
       }
     }
@@ -1024,7 +1041,7 @@ export class DataStore {
     if (!this.isDbConnected) return;
 
     try {
-      await prisma.alertRule.delete({ where: { id } }).catch(() => {});
+      await prisma.alertRule.deleteMany({ where: { id } }).catch(() => {});
     } catch (err: any) {
       console.error(`[DataStore] Failed to delete alert rule '${id}':`, err?.message || err);
     }
@@ -1057,8 +1074,13 @@ export class DataStore {
   }
 
   public async saveEvent(event: SystemEvent): Promise<void> {
-    this.events.unshift(event);
-    if (this.events.length > 200) this.events.pop();
+    const existingIdx = this.events.findIndex(e => e.id === event.id);
+    if (existingIdx >= 0) {
+      this.events[existingIdx] = event;
+    } else {
+      this.events.unshift(event);
+      if (this.events.length > 200) this.events.pop();
+    }
 
     if (!this.isDbConnected) return;
 
@@ -1068,8 +1090,18 @@ export class DataStore {
       : null;
 
     try {
-      await prisma.event.create({
-        data: {
+      await prisma.event.upsert({
+        where: { id: event.id },
+        update: {
+          connectionId: validConnectionId,
+          eventType: event.eventType,
+          severity: event.severity as any,
+          source: event.source,
+          message: event.message,
+          metadata: (event.metadata as any) || undefined,
+          timestamp: new Date(event.timestamp)
+        },
+        create: {
           id: event.id,
           connectionId: validConnectionId,
           eventType: event.eventType,
@@ -1086,8 +1118,13 @@ export class DataStore {
   }
 
   public async saveAuditLog(log: AuditLog): Promise<void> {
-    this.auditLogs.unshift(log);
-    if (this.auditLogs.length > 200) this.auditLogs.pop();
+    const existingIdx = this.auditLogs.findIndex(l => l.id === log.id);
+    if (existingIdx >= 0) {
+      this.auditLogs[existingIdx] = log;
+    } else {
+      this.auditLogs.unshift(log);
+      if (this.auditLogs.length > 200) this.auditLogs.pop();
+    }
 
     if (!this.isDbConnected) return;
 
@@ -1096,8 +1133,21 @@ export class DataStore {
       : null;
 
     try {
-      await prisma.auditLog.create({
-        data: {
+      await prisma.auditLog.upsert({
+        where: { id: log.id },
+        update: {
+          userId: log.userId,
+          username: log.username,
+          connectionId: validConnectionId,
+          action: log.action,
+          resourceType: log.resourceType,
+          resourceId: log.resourceId,
+          details: log.details,
+          ipAddress: log.ipAddress,
+          status: log.status || 'SUCCESS',
+          createdAt: new Date(log.createdAt)
+        },
+        create: {
           id: log.id,
           userId: log.userId,
           username: log.username,
@@ -1118,7 +1168,7 @@ export class DataStore {
 
   public async saveMetric(metric: MetricDataPoint): Promise<void> {
     this.metrics.push(metric);
-    if (this.metrics.length > 300) {
+    if (this.metrics.length > 500) {
       this.metrics.shift();
     }
 
@@ -1132,17 +1182,203 @@ export class DataStore {
       await prisma.metric.create({
         data: {
           connectionId: validConnectionId,
+          hostId: metric.hostId || null,
           cpuPct: metric.cpu,
+          cpuCoresTotal: metric.cpuCoresTotal ?? null,
           memoryPct: metric.memory,
+          memoryUsedBytes: metric.memoryBytesUsed != null ? BigInt(Math.round(metric.memoryBytesUsed)) : null,
+          memoryTotalBytes: metric.memoryBytesTotal != null ? BigInt(Math.round(metric.memoryBytesTotal)) : null,
           storagePct: metric.storage,
+          storageUsedBytes: metric.storageBytesUsed != null ? BigInt(Math.round(metric.storageBytesUsed)) : null,
+          storageTotalBytes: metric.storageBytesTotal != null ? BigInt(Math.round(metric.storageBytesTotal)) : null,
           networkRxKbps: metric.networkRxKbps,
           networkTxKbps: metric.networkTxKbps,
+          uptimeSeconds: metric.uptimeSeconds != null ? BigInt(Math.round(metric.uptimeSeconds)) : null,
+          latencyMs: metric.latencyMs != null ? Math.round(metric.latencyMs) : null,
           timestamp: new Date(metric.timestamp)
         }
       });
     } catch (err: any) {
       console.error(`[DataStore] Failed to persist metric:`, err?.message || err);
     }
+  }
+
+  public async saveNormalizedTelemetry(telemetry: NormalizedTelemetry): Promise<void> {
+    this.latestTelemetry.set(telemetry.connectionId, telemetry);
+
+    const metricPoint: MetricDataPoint = {
+      id: telemetry.id,
+      connectionId: telemetry.connectionId,
+      hostId: telemetry.hostId,
+      timestamp: telemetry.timestamp,
+      cpu: telemetry.cpu.utilizationPct,
+      cpuCoresTotal: telemetry.cpu.coresTotal,
+      memory: telemetry.memory.utilizationPct,
+      memoryBytesUsed: telemetry.memory.usedBytes,
+      memoryBytesTotal: telemetry.memory.totalBytes,
+      storage: telemetry.storage.utilizationPct,
+      storageBytesUsed: telemetry.storage.usedBytes,
+      storageBytesTotal: telemetry.storage.totalBytes,
+      networkRxKbps: telemetry.network.rxKbps || 0,
+      networkTxKbps: telemetry.network.txKbps || 0,
+      uptimeSeconds: telemetry.uptimeSeconds,
+      latencyMs: telemetry.latencyMs
+    };
+
+    await this.saveMetric(metricPoint);
+  }
+
+  public async getTelemetryHistory(connectionId?: string, range = '24h'): Promise<MetricDataPoint[]> {
+    const now = Date.now();
+    let durationMs = 24 * 60 * 60 * 1000;
+    if (range === '1h') durationMs = 60 * 60 * 1000;
+    else if (range === '6h') durationMs = 6 * 60 * 60 * 1000;
+    else if (range === '24h') durationMs = 24 * 60 * 60 * 1000;
+    else if (range === '7d') durationMs = 7 * 24 * 60 * 60 * 1000;
+    else if (range === '30d') durationMs = 30 * 24 * 60 * 60 * 1000;
+    const cutoffDate = new Date(now - durationMs);
+
+    const downsample = (points: MetricDataPoint[], targetCount = 150): MetricDataPoint[] => {
+      if (points.length <= targetCount) return points;
+      const step = points.length / targetCount;
+      const sampled: MetricDataPoint[] = [];
+      for (let i = 0; i < targetCount; i++) {
+        const idx = Math.min(Math.floor(i * step), points.length - 1);
+        sampled.push(points[idx]);
+      }
+      return sampled;
+    };
+
+    if (this.isDbConnected) {
+      try {
+        const records = await prisma.metric.findMany({
+          where: {
+            ...(connectionId ? { connectionId } : {}),
+            timestamp: { gte: cutoffDate }
+          },
+          orderBy: { timestamp: 'asc' }
+        });
+
+        const mapped: MetricDataPoint[] = records.map(r => ({
+          id: r.id,
+          connectionId: r.connectionId || undefined,
+          hostId: r.hostId || undefined,
+          timestamp: r.timestamp.toISOString(),
+          cpu: r.cpuPct,
+          cpuCoresTotal: r.cpuCoresTotal,
+          memory: r.memoryPct,
+          memoryBytesUsed: r.memoryUsedBytes != null ? Number(r.memoryUsedBytes) : undefined,
+          memoryBytesTotal: r.memoryTotalBytes != null ? Number(r.memoryTotalBytes) : undefined,
+          storage: r.storagePct ?? 0,
+          storageBytesUsed: r.storageUsedBytes != null ? Number(r.storageUsedBytes) : undefined,
+          storageBytesTotal: r.storageTotalBytes != null ? Number(r.storageTotalBytes) : undefined,
+          networkRxKbps: r.networkRxKbps,
+          networkTxKbps: r.networkTxKbps,
+          uptimeSeconds: r.uptimeSeconds != null ? Number(r.uptimeSeconds) : undefined,
+          latencyMs: r.latencyMs ?? undefined
+        }));
+
+        return downsample(mapped, 150);
+      } catch (err: any) {
+        console.error('[DataStore] Error querying telemetry history from DB:', err?.message || err);
+      }
+    }
+
+    // Fallback in-memory query
+    const filtered = this.metrics.filter(m => {
+      const matchConn = connectionId ? m.connectionId === connectionId : true;
+      const matchTime = new Date(m.timestamp) >= cutoffDate;
+      return matchConn && matchTime;
+    });
+
+    return downsample(filtered, 150);
+  }
+
+  public async getLatestTelemetry(connectionId: string): Promise<NormalizedTelemetry | null> {
+    if (this.latestTelemetry.has(connectionId)) {
+      return this.latestTelemetry.get(connectionId)!;
+    }
+
+    // Fallback to most recent metric point for this connection
+    const match = [...this.metrics].reverse().find(m => m.connectionId === connectionId);
+    if (!match) return null;
+
+    const host = Array.from(this.esxiHosts.values()).find(h => h.connectionId === connectionId);
+    const vms = Array.from(this.virtualMachines.values()).filter(v => v.connectionId === connectionId);
+
+    const totalVms = vms.length;
+    const runningVms = vms.filter(v => v.powerState === 'RUNNING').length;
+    const stoppedVms = vms.filter(v => v.powerState === 'STOPPED').length;
+    const suspendedVms = vms.filter(v => v.powerState === 'SUSPENDED').length;
+
+    return {
+      id: match.id || `tel-${connectionId}`,
+      connectionId,
+      hostId: match.hostId || host?.id,
+      timestamp: match.timestamp,
+      cpu: {
+        utilizationPct: match.cpu,
+        coresTotal: match.cpuCoresTotal || host?.cpuCores || 1
+      },
+      memory: {
+        usedBytes: match.memoryBytesUsed || 0,
+        totalBytes: match.memoryBytesTotal || 0,
+        utilizationPct: match.memory
+      },
+      storage: {
+        usedBytes: match.storageBytesUsed || 0,
+        totalBytes: match.storageBytesTotal || 0,
+        utilizationPct: match.storage
+      },
+      network: {
+        rxBytesPerSec: null,
+        txBytesPerSec: null,
+        rxKbps: match.networkRxKbps,
+        txKbps: match.networkTxKbps
+      },
+      vms: {
+        total: totalVms,
+        running: runningVms,
+        stopped: stoppedVms,
+        suspended: suspendedVms
+      },
+      datastores: host?.datastores ? host.datastores.map(d => ({
+        name: d.name,
+        capacityBytes: d.capacityBytes,
+        freeBytes: d.freeBytes,
+        usedBytes: Math.max(0, d.capacityBytes - d.freeBytes),
+        usagePct: d.usagePct
+      })) : undefined,
+      uptimeSeconds: match.uptimeSeconds || host?.uptimeSeconds || 0,
+      latencyMs: match.latencyMs || 0,
+      status: 'ONLINE'
+    };
+  }
+
+  public async cleanOldMetrics(retentionDays?: number): Promise<number> {
+    const days = retentionDays ?? this.settings.metricRetentionDays ?? 30;
+    const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    let deletedCount = 0;
+
+    const beforeLen = this.metrics.length;
+    this.metrics = this.metrics.filter(m => new Date(m.timestamp) >= cutoffDate);
+    deletedCount += (beforeLen - this.metrics.length);
+
+    if (this.isDbConnected) {
+      try {
+        const result = await prisma.metric.deleteMany({
+          where: {
+            timestamp: { lt: cutoffDate }
+          }
+        });
+        deletedCount = result.count;
+        console.log(`[DataStore] Cleaned ${deletedCount} metric records older than ${days} days from DB.`);
+      } catch (err: any) {
+        console.error('[DataStore] Failed to clean old metrics from DB:', err?.message || err);
+      }
+    }
+
+    return deletedCount;
   }
 
   public async saveSettings(settings: SystemSettings): Promise<void> {
@@ -1295,8 +1531,8 @@ export class DataStore {
       id: 'conn-esxi-prod-01',
       name: 'ESXi Production Cluster (vCenter 8.0)',
       type: 'ESXI',
-      host: '10.240.10.15',
-      port: 443,
+      host: '127.0.0.1',
+      port: 7443,
       useHttps: true,
       skipSslVerify: true,
       username: 'root',
@@ -1308,7 +1544,7 @@ export class DataStore {
       lastCheckedAt: new Date().toISOString(),
       pollIntervalSec: 30,
       isEnabled: true,
-      isDemo: true,
+      isDemo: false,
       createdAt: new Date(Date.now() - 86400000 * 14).toISOString(),
       updatedAt: new Date().toISOString()
     };

@@ -114,4 +114,36 @@ router.get('/:id/networks', authenticateToken, (req: AuthenticatedRequest, res: 
   res.json(host ? host.networks : []);
 });
 
+// Get ESXi-specific telemetry breakdown including datastores and VM stats
+router.get('/:id/telemetry', authenticateToken, async (req: AuthenticatedRequest, res: Response) => {
+  const { id } = req.params;
+  const conn = store.connections.get(id);
+  if (!conn) {
+    res.status(404).json({ error: 'Connection not found' });
+    return;
+  }
+
+  try {
+    let telemetry = await store.getLatestTelemetry(id);
+    if (!telemetry && conn.status === 'ONLINE') {
+      const provider = providerRegistry.getProvider(conn);
+      if (typeof (provider as any).getNormalizedTelemetry === 'function') {
+        telemetry = await (provider as any).getNormalizedTelemetry();
+        if (telemetry) {
+          await store.saveNormalizedTelemetry(telemetry);
+        }
+      }
+    }
+
+    if (!telemetry) {
+      res.status(404).json({ error: 'No telemetry collected yet for this connection' });
+      return;
+    }
+
+    res.json(telemetry);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to fetch ESXi telemetry' });
+  }
+});
+
 export default router;

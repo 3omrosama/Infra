@@ -566,8 +566,8 @@ export class ESXiProvider extends BaseInfrastructureProvider {
         storage: tel.storage.utilizationPct,
         storageBytesUsed: tel.storage.usedBytes,
         storageBytesTotal: tel.storage.totalBytes,
-        networkRxKbps: tel.network.rxKbps || 0,
-        networkTxKbps: tel.network.txKbps || 0,
+        networkRxKbps: tel.network.rxKbps,
+        networkTxKbps: tel.network.txKbps,
         uptimeSeconds: tel.uptimeSeconds,
         latencyMs: tel.latencyMs
       };
@@ -579,8 +579,8 @@ export class ESXiProvider extends BaseInfrastructureProvider {
         cpu: 0,
         memory: 0,
         storage: 0,
-        networkRxKbps: 0,
-        networkTxKbps: 0
+        networkRxKbps: null,
+        networkTxKbps: null
       };
     }
   }

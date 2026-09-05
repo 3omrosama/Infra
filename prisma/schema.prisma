@@ -369,8 +369,8 @@ model Metric {
   storageUsedBytes  BigInt?
   storageTotalBytes BigInt?
   storagePct        Float?
-  networkRxKbps     Float                     @default(0)
-  networkTxKbps     Float                     @default(0)
+  networkRxKbps     Float?
+  networkTxKbps     Float?
   uptimeSeconds     BigInt?
   latencyMs         Int?
   timestamp         DateTime                  @default(now())

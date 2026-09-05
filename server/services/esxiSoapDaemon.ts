@@ -14,8 +14,24 @@ export class ESXiSoapDaemon {
     const certPath = '/tmp/esxi-cert.pem';
     const keyPath = '/tmp/esxi-key.pem';
 
+    // If certificates do not exist, attempt to generate self-signed TLS certificates on-the-fly
     if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
-      throw new Error('TLS certificates for ESXi SOAP Daemon not found');
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync(
+          `openssl req -x509 -newkey rsa:2048 -nodes -keyout "${keyPath}" -out "${certPath}" -days 3650 -subj "/CN=127.0.0.1"`,
+          { stdio: 'pipe' }
+        );
+      } catch (genErr: any) {
+        console.warn('[ESXiSoapDaemon] TLS certificates not found and automated generation failed:', genErr?.message || genErr);
+        console.warn('[ESXiSoapDaemon] Internal mock daemon disabled. Monitoring will connect directly to external ESXi/vCenter endpoints.');
+        return;
+      }
+    }
+
+    if (!fs.existsSync(certPath) || !fs.existsSync(keyPath)) {
+      console.warn('[ESXiSoapDaemon] TLS certificates not available; internal ESXi mock daemon disabled.');
+      return;
     }
 
     const cert = fs.readFileSync(certPath);
@@ -325,8 +341,13 @@ export class ESXiSoapDaemon {
         resolve();
       });
 
-      this.server.on('error', err => {
-        reject(err);
+      this.server.on('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          console.log(`[ESXiSoapDaemon] Port ${this.port} is already active, reusing existing listener.`);
+          resolve();
+        } else {
+          reject(err);
+        }
       });
     });
   }

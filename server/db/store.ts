@@ -354,7 +354,7 @@ export class DataStore {
         useHttps: c.useHttps,
         skipSslVerify: c.skipSslVerify,
         username: c.username || undefined,
-        endpointKey: c.endpointKey || undefined,
+        endpointKey: c.endpointKey || normalizeEndpoint(c.type as any, c.host, c.port, c.useHttps).key,
         encryptedSecret: c.encryptedSecret || undefined,
         secretIv: c.secretIv || undefined,
         secretTag: c.secretTag || undefined,

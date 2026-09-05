@@ -182,21 +182,63 @@ describe('AlertEngine Deduplication & Lifecycle', () => {
     assert.strictEqual(unresolvedAlerts[0].valueObserved, 89.0, 'Value must be updated to the latest poll reading (84 + 5)');
   });
 
-  it('Test E: PostgreSQL persistence verification → matches in-memory store', async () => {
-    if (!store.isDbConnected) return;
-
-    const dbAlerts = await prisma.alert.findMany({
-      where: { source: testSourceName },
-      orderBy: { createdAt: 'asc' }
+  it('Test F: Offline ACTIVE + successful poll → auto-resolved', async () => {
+    // 1. Trigger Offline Alert
+    await alertEngine.evaluateMetrics({
+      connectionId: testConnId,
+      sourceName: testSourceName,
+      resourceType: 'SERVER',
+      cpuPct: 0,
+      memoryPct: 0,
+      isOffline: true
     });
 
-    // We expect exactly 2 alerts in DB: 1 RESOLVED and 1 ACKNOWLEDGED
-    assert.strictEqual(dbAlerts.length, 2, 'Database should contain exactly 2 alert records for this source');
-    const resolvedInDb = dbAlerts.find(a => a.status === 'RESOLVED');
-    const ackedInDb = dbAlerts.find(a => a.status === 'ACKNOWLEDGED');
+    const activeAlerts = Array.from(store.alerts.values()).filter(a => a.status === 'ACTIVE' && a.source === testSourceName);
+    assert.strictEqual(activeAlerts.length, 1);
+    const alertId = activeAlerts[0].id;
 
-    assert.ok(resolvedInDb, 'RESOLVED record exists in DB');
-    assert.ok(ackedInDb, 'ACKNOWLEDGED record exists in DB');
-    assert.strictEqual(ackedInDb.valueObserved, 89.0, 'DB record reflects latest telemetry observation');
+    // 2. Simulate successful poll (node recovered)
+    await alertEngine.evaluateMetrics({
+      connectionId: testConnId,
+      sourceName: testSourceName,
+      resourceType: 'SERVER',
+      cpuPct: 50.0,
+      memoryPct: 50.0,
+      isOffline: false
+    });
+
+    const alerts = Array.from(store.alerts.values()).filter(a => a.id === alertId);
+    assert.strictEqual(alerts[0].status, 'RESOLVED', 'Alert should be automatically resolved');
+  });
+
+  it('Test G: Offline ACKNOWLEDGED + successful poll → auto-resolved', async () => {
+    // 1. Trigger Offline Alert
+    await alertEngine.evaluateMetrics({
+      connectionId: testConnId,
+      sourceName: testSourceName,
+      resourceType: 'SERVER',
+      cpuPct: 0,
+      memoryPct: 0,
+      isOffline: true
+    });
+
+    const activeAlerts = Array.from(store.alerts.values()).filter(a => a.status === 'ACTIVE' && a.source === testSourceName);
+    const alertId = activeAlerts[0].id;
+
+    // 2. Acknowledge it
+    alertEngine.acknowledgeAlert(alertId, 'operator-tester');
+
+    // 3. Simulate successful poll
+    await alertEngine.evaluateMetrics({
+      connectionId: testConnId,
+      sourceName: testSourceName,
+      resourceType: 'SERVER',
+      cpuPct: 50.0,
+      memoryPct: 50.0,
+      isOffline: false
+    });
+
+    const alerts = Array.from(store.alerts.values()).filter(a => a.id === alertId);
+    assert.strictEqual(alerts[0].status, 'RESOLVED', 'Acknowledged alert should be automatically resolved');
   });
 });

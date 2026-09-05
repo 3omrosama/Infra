@@ -132,6 +132,39 @@ class AlertEngine {
             message: `Alert triggered: ${alertTitle}`
           });
         }
+      } else {
+        // If condition is NOT triggered but an unresolved incident exists for this condition, auto-resolve it
+        // Determine the alert title that WOULD have been triggered if it was offline
+        let expectedTitle = '';
+        if (rule.metric === 'status') {
+            expectedTitle = `Node Offline: ${metricData.sourceName}`;
+        }
+        
+        if (expectedTitle) {
+            const existingUnresolved = Array.from(store.alerts.values()).find(
+              a => (a.status === 'ACTIVE' || a.status === 'ACKNOWLEDGED') &&
+                   a.source === metricData.sourceName &&
+                   a.title === expectedTitle &&
+                   (!metricData.connectionId || !a.connectionId || a.connectionId === metricData.connectionId)
+            );
+
+            if (existingUnresolved) {
+              // Auto-resolve
+              existingUnresolved.status = 'RESOLVED';
+              existingUnresolved.resolvedAt = new Date().toISOString();
+              existingUnresolved.resolvedBy = 'Alert Engine (Auto-Resolve)';
+              existingUnresolved.updatedAt = new Date().toISOString();
+              await store.saveAlert(existingUnresolved);
+              
+              store.addEvent({
+                connectionId: existingUnresolved.connectionId,
+                eventType: 'ALERT_RESOLVED',
+                severity: 'INFO',
+                source: 'Alert Engine',
+                message: `Alert '${existingUnresolved.title}' automatically resolved (Condition healthy)`
+              });
+            }
+        }
       }
     }
   }

@@ -68,7 +68,7 @@ export class DataStore {
     autoResolveMinutes: 120
   };
 
-  private isDbConnected: boolean = false;
+  public isDbConnected: boolean = false;
 
   public async init() {
     console.log('[DataStore] Initializing PostgreSQL database store...');

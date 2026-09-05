@@ -1,6 +1,7 @@
 import { store } from '../db/store.js';
 import { Alert, AlertRule, AlertSeverity } from '../../src/types/index.js';
 import { dispatchNotification } from './notifier.js';
+import { prisma } from '../db/prisma.js';
 
 class AlertEngine {
   public async evaluateMetrics(metricData: {
@@ -44,14 +45,66 @@ class AlertEngine {
       }
 
       if (triggered) {
-        // Check if active alert already exists to prevent duplicate flooding
-        const existingActive = Array.from(store.alerts.values()).find(
-          a => a.status === 'ACTIVE' && 
+        // Check if an unresolved incident (ACTIVE or ACKNOWLEDGED) already exists for this condition
+        // A previously RESOLVED alert will NOT match, allowing a new incident if the condition returns
+        let existingUnresolved = Array.from(store.alerts.values()).find(
+          a => (a.status === 'ACTIVE' || a.status === 'ACKNOWLEDGED') && 
                a.source === metricData.sourceName && 
-               a.title === alertTitle
+               a.title === alertTitle &&
+               (!metricData.connectionId || !a.connectionId || a.connectionId === metricData.connectionId) &&
+               (!metricData.resourceId || !a.resourceId || a.resourceId === metricData.resourceId)
         );
 
-        if (!existingActive) {
+        // Check PostgreSQL persistence if not found in active in-memory store
+        if (!existingUnresolved && store.isDbConnected) {
+          try {
+            const dbAlert = await prisma.alert.findFirst({
+              where: {
+                status: { in: ['ACTIVE', 'ACKNOWLEDGED'] },
+                source: metricData.sourceName,
+                title: alertTitle,
+                ...(metricData.connectionId ? { connectionId: metricData.connectionId } : {}),
+                ...(metricData.resourceId ? { resourceId: metricData.resourceId } : {})
+              },
+              orderBy: { createdAt: 'desc' }
+            });
+
+            if (dbAlert) {
+              existingUnresolved = {
+                id: dbAlert.id,
+                connectionId: dbAlert.connectionId || undefined,
+                title: dbAlert.title,
+                message: dbAlert.message,
+                severity: dbAlert.severity as any,
+                status: dbAlert.status as any,
+                source: dbAlert.source,
+                resourceType: dbAlert.resourceType as any,
+                resourceId: dbAlert.resourceId || undefined,
+                valueObserved: dbAlert.valueObserved ?? undefined,
+                threshold: dbAlert.threshold ?? undefined,
+                acknowledgedAt: dbAlert.acknowledgedAt?.toISOString(),
+                acknowledgedBy: dbAlert.acknowledgedBy || undefined,
+                resolvedAt: dbAlert.resolvedAt?.toISOString(),
+                resolvedBy: dbAlert.resolvedBy || undefined,
+                createdAt: dbAlert.createdAt.toISOString(),
+                updatedAt: dbAlert.updatedAt.toISOString()
+              };
+              store.alerts.set(existingUnresolved.id, existingUnresolved);
+            }
+          } catch (dbErr: any) {
+            console.warn('[AlertEngine] Database deduplication query fallback note:', dbErr?.message || dbErr);
+          }
+        }
+
+        if (existingUnresolved) {
+          // Update the existing open incident with latest telemetry
+          // Preserve ACKNOWLEDGED status (do NOT reset back to ACTIVE)
+          existingUnresolved.valueObserved = observedValue;
+          existingUnresolved.message = alertMsg;
+          existingUnresolved.updatedAt = new Date().toISOString();
+          await store.saveAlert(existingUnresolved);
+        } else {
+          // Condition is new or was previously RESOLVED: create a new ACTIVE alert
           const alert: Alert = {
             id: `alert-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
             connectionId: metricData.connectionId,
@@ -68,7 +121,7 @@ class AlertEngine {
             updatedAt: new Date().toISOString()
           };
 
-          store.saveAlert(alert);
+          await store.saveAlert(alert);
           await dispatchNotification(alert);
 
           store.addEvent({

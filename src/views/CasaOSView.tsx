@@ -13,7 +13,6 @@ import {
   AlertCircle,
   Thermometer,
   ChevronDown,
-  ChevronUp,
   Cpu,
   Layers
 } from 'lucide-react';
@@ -38,6 +37,7 @@ export const CasaOSView: React.FC<CasaOSViewProps> = ({
 }) => {
   const { showToast } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const safeServers = servers || [];
 
   // Local apps state for immediate optimistic action reflection
@@ -54,6 +54,20 @@ export const CasaOSView: React.FC<CasaOSViewProps> = ({
       ...prev,
       [serverId]: !prev[serverId]
     }));
+  };
+
+  const handleRefreshClick = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.resolve(onRefresh());
+    } catch (err: any) {
+      showToast('Refresh Failed', err?.message || 'Failed to refresh CasaOS applications', 'CRITICAL');
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 500);
+    }
   };
 
   // Pending App Action state
@@ -131,11 +145,17 @@ export const CasaOSView: React.FC<CasaOSViewProps> = ({
 
           <button
             id="btn-refresh-casaos"
-            onClick={onRefresh}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-colors"
+            disabled={isRefreshing}
+            onClick={handleRefreshClick}
+            className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all select-none ${
+              isRefreshing
+                ? 'opacity-75 cursor-not-allowed text-cyan-300 border-cyan-500/30'
+                : 'hover:bg-slate-800 hover:text-white active:scale-95'
+            }`}
+            title="Refresh edge applications and node status"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Refresh</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+            <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
           </button>
         </div>
       </div>
@@ -226,215 +246,222 @@ export const CasaOSView: React.FC<CasaOSViewProps> = ({
                       </div>
                     </div>
 
-                    <button 
-                      type="button"
+                    <div 
                       aria-label={isCollapsed ? 'Expand server group' : 'Collapse server group'}
-                      className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 transition-colors ml-1"
+                      className={`p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 ml-1 transition-transform duration-200 ease-out motion-reduce:transition-none ${
+                        isCollapsed ? 'rotate-0' : 'rotate-180'
+                      }`}
                     >
-                      {isCollapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-                    </button>
+                      <ChevronDown className="w-4 h-4" />
+                    </div>
                   </div>
                 </div>
 
-                {/* Expanded Content: Hardware Strip, Attached Disks, and Server Applications */}
-                {!isCollapsed && (
-                  <div className="p-5 pt-0 space-y-5 border-t border-slate-800/50">
-                    {/* Hardware Telemetry Strip */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4">
-                      <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                        <p className="text-[10px] font-semibold text-slate-400 uppercase">CPU Utilization</p>
-                        <p className="text-base font-bold text-cyan-400 mt-0.5">
-                          {server.cpuUsagePct != null ? `${server.cpuUsagePct.toFixed(1)}%` : '—'}
-                        </p>
-                        <p className="text-[11px] text-slate-500 font-mono">{server.cpuCores ? `${server.cpuCores} Cores` : 'Edge Compute'}</p>
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                        <p className="text-[10px] font-semibold text-slate-400 uppercase">System RAM</p>
-                        <p className="text-base font-bold text-emerald-400 mt-0.5">
-                          {server.memoryUsagePct != null ? `${server.memoryUsagePct.toFixed(1)}%` : '—'}
-                        </p>
-                        <p className="text-[11px] text-slate-500 font-mono">
-                          {server.memoryBytesTotal ? formatBytes(server.memoryBytesTotal) : 'System Memory'}
-                        </p>
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                        <p className="text-[10px] font-semibold text-slate-400 uppercase">Physical Storage</p>
-                        <p className="text-base font-bold text-purple-400 mt-0.5">
-                          {server.storageUsagePct != null ? `${server.storageUsagePct.toFixed(1)}%` : '—'}
-                        </p>
-                        <p className="text-[11px] text-slate-500 font-mono">
-                          {server.storageBytesTotal ? formatBytes(server.storageBytesTotal) : 'Primary Pool'}
-                        </p>
-                      </div>
-                      <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                        <p className="text-[10px] font-semibold text-slate-400 uppercase">Node Uptime</p>
-                        <p className="text-base font-bold text-white mt-0.5">
-                          {server.uptimeSeconds != null ? formatUptime(server.uptimeSeconds) : '—'}
-                        </p>
-                        <p className="text-[11px] text-slate-500 font-mono">Active</p>
-                      </div>
-                    </div>
-
-                    {/* Physical Storage & Disks */}
-                    {server.disks && server.disks.length > 0 && (
-                      <div className="pt-2 border-t border-slate-800/80">
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
-                          Attached Drives & SMART Health
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {server.disks.map((disk, idx) => (
-                            <div key={idx} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-2.5">
-                                <HardDrive className="w-4 h-4 text-cyan-400 shrink-0" />
-                                <div className="truncate">
-                                  <p className="font-bold text-white truncate">{disk.model}</p>
-                                  <p className="text-[10px] text-slate-500 font-mono">{disk.path} • {formatBytes(disk.sizeBytes)}</p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-3 text-right shrink-0">
-                                {disk.temperatureC && (
-                                  <div className="flex items-center gap-1 text-[11px] font-mono text-slate-400">
-                                    <Thermometer className="w-3.5 h-3.5 text-amber-400" />
-                                    <span>{disk.temperatureC}°C</span>
-                                  </div>
-                                )}
-                                <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-400">
-                                  {disk.smartStatus}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
+                {/* Expanded Content with Smooth Grid Row Transition */}
+                <div 
+                  className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none ${
+                    isCollapsed ? 'grid-rows-[0fr] opacity-0 pointer-events-none' : 'grid-rows-[1fr] opacity-100'
+                  }`}
+                >
+                  <div className="overflow-hidden">
+                    <div className="p-5 pt-0 space-y-5 border-t border-slate-800/50">
+                      {/* Hardware Telemetry Strip */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4">
+                        <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase">CPU Utilization</p>
+                          <p className="text-base font-bold text-cyan-400 mt-0.5">
+                            {server.cpuUsagePct != null ? `${server.cpuUsagePct.toFixed(1)}%` : '—'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 font-mono">{server.cpuCores ? `${server.cpuCores} Cores` : 'Edge Compute'}</p>
                         </div>
-                      </div>
-                    )}
-
-                    {/* Installed Applications for this Server Group */}
-                    <div className="pt-2 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Boxes className="w-4 h-4 text-cyan-400" />
-                          <h4 className="text-sm font-bold text-white">
-                            Applications on {server.hostname}
-                          </h4>
-                          <span className="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[10px] font-mono text-cyan-400">
-                            {filteredServerApps.length} {filteredServerApps.length === 1 ? 'App' : 'Apps'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {filteredServerApps.length === 0 ? (
-                        <div className="p-6 text-center bg-slate-950/50 border border-slate-800/60 rounded-xl">
-                          <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                          <p className="text-xs text-slate-400">
-                            {searchQuery.trim() ? `No applications matching "${searchQuery}" on this node.` : 'No applications installed on this CasaOS server.'}
+                        <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase">System RAM</p>
+                          <p className="text-base font-bold text-emerald-400 mt-0.5">
+                            {server.memoryUsagePct != null ? `${server.memoryUsagePct.toFixed(1)}%` : '—'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 font-mono">
+                            {server.memoryBytesTotal ? formatBytes(server.memoryBytesTotal) : 'System Memory'}
                           </p>
                         </div>
-                      ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {filteredServerApps.map(app => {
-                            const isRunning = app.status === 'running';
-                            const isRestarting = app.status === 'restarting';
+                        <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase">Physical Storage</p>
+                          <p className="text-base font-bold text-purple-400 mt-0.5">
+                            {server.storageUsagePct != null ? `${server.storageUsagePct.toFixed(1)}%` : '—'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 font-mono">
+                            {server.storageBytesTotal ? formatBytes(server.storageBytesTotal) : 'Primary Pool'}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase">Node Uptime</p>
+                          <p className="text-base font-bold text-white mt-0.5">
+                            {server.uptimeSeconds != null ? formatUptime(server.uptimeSeconds) : '—'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 font-mono">Active</p>
+                        </div>
+                      </div>
 
-                            return (
-                              <div
-                                key={app.id}
-                                id={`casaos-app-${app.id}`}
-                                className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between space-y-3"
-                              >
-                                <div>
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div className="flex items-center gap-2.5 min-w-0">
-                                      <img
-                                        src={app.iconUrl}
-                                        alt={app.title}
-                                        onError={(e: any) => { e.target.src = 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/docker.png'; }}
-                                        className="w-9 h-9 rounded-lg bg-slate-800 p-1 border border-slate-700/60 object-contain shrink-0"
-                                        referrerPolicy="no-referrer"
-                                      />
-                                      <div className="min-w-0">
-                                        <h5 className="font-bold text-white text-sm truncate">{app.title}</h5>
-                                        <p className="text-[10px] text-slate-400 font-mono truncate max-w-[170px]">{app.image}</p>
+                      {/* Physical Storage & Disks */}
+                      {server.disks && server.disks.length > 0 && (
+                        <div className="pt-2 border-t border-slate-800/80">
+                          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
+                            Attached Drives & SMART Health
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {server.disks.map((disk, idx) => (
+                              <div key={idx} className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2.5">
+                                  <HardDrive className="w-4 h-4 text-cyan-400 shrink-0" />
+                                  <div className="truncate">
+                                    <p className="font-bold text-white truncate">{disk.model}</p>
+                                    <p className="text-[10px] text-slate-500 font-mono">{disk.path} • {formatBytes(disk.sizeBytes)}</p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3 text-right shrink-0">
+                                  {disk.temperatureC && (
+                                    <div className="flex items-center gap-1 text-[11px] font-mono text-slate-400">
+                                      <Thermometer className="w-3.5 h-3.5 text-amber-400" />
+                                      <span>{disk.temperatureC}°C</span>
+                                    </div>
+                                  )}
+                                  <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-emerald-500/20 text-emerald-400">
+                                    {disk.smartStatus}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Installed Applications for this Server Group */}
+                      <div className="pt-2 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Boxes className="w-4 h-4 text-cyan-400" />
+                            <h4 className="text-sm font-bold text-white">
+                              Applications on {server.hostname}
+                            </h4>
+                            <span className="px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[10px] font-mono text-cyan-400">
+                              {filteredServerApps.length} {filteredServerApps.length === 1 ? 'App' : 'Apps'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {filteredServerApps.length === 0 ? (
+                          <div className="p-6 text-center bg-slate-950/50 border border-slate-800/60 rounded-xl">
+                            <Boxes className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                            <p className="text-xs text-slate-400">
+                              {searchQuery.trim() ? `No applications matching "${searchQuery}" on this node.` : 'No applications installed on this CasaOS server.'}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {filteredServerApps.map(app => {
+                              const isRunning = app.status === 'running';
+                              const isRestarting = app.status === 'restarting';
+
+                              return (
+                                <div
+                                  key={app.id}
+                                  id={`casaos-app-${app.id}`}
+                                  className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between space-y-3"
+                                >
+                                  <div>
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <img
+                                          src={app.iconUrl}
+                                          alt={app.title}
+                                          onError={(e: any) => { e.target.src = 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/docker.png'; }}
+                                          className="w-9 h-9 rounded-lg bg-slate-800 p-1 border border-slate-700/60 object-contain shrink-0"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                        <div className="min-w-0">
+                                          <h5 className="font-bold text-white text-sm truncate">{app.title}</h5>
+                                          <p className="text-[10px] text-slate-400 font-mono truncate max-w-[170px]">{app.image}</p>
+                                        </div>
                                       </div>
+
+                                      <span className={`px-2 py-0.5 text-[10px] font-bold font-mono rounded shrink-0 ${
+                                        isRunning
+                                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                          : isRestarting
+                                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse'
+                                          : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                      }`}>
+                                        {app.status}
+                                      </span>
                                     </div>
 
-                                    <span className={`px-2 py-0.5 text-[10px] font-bold font-mono rounded shrink-0 ${
-                                      isRunning
-                                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                        : isRestarting
-                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse'
-                                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                                    }`}>
-                                      {app.status}
-                                    </span>
+                                    <p className="text-xs text-slate-400 mt-2.5 line-clamp-2 leading-relaxed">
+                                      {app.description || 'Docker containerized service managed by CasaOS.'}
+                                    </p>
                                   </div>
 
-                                  <p className="text-xs text-slate-400 mt-2.5 line-clamp-2 leading-relaxed">
-                                    {app.description || 'Docker containerized service managed by CasaOS.'}
-                                  </p>
-                                </div>
+                                  {/* Ports & Controls */}
+                                  <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between">
+                                    <div className="text-[11px] font-mono text-slate-400">
+                                      {app.port ? `Port :${app.port}` : 'Bridge Net'}
+                                    </div>
 
-                                {/* Ports & Controls */}
-                                <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between">
-                                  <div className="text-[11px] font-mono text-slate-400">
-                                    {app.port ? `Port :${app.port}` : 'Bridge Net'}
-                                  </div>
+                                    <div className="flex items-center gap-1.5">
+                                      {app.port && isRunning && (
+                                        <a
+                                          href={`http://${server.ipAddress || server.hostname || 'localhost'}:${app.port}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-slate-300 hover:text-cyan-300 transition-colors"
+                                          title="Open Web Interface"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" />
+                                        </a>
+                                      )}
 
-                                  <div className="flex items-center gap-1.5">
-                                    {app.port && isRunning && (
-                                      <a
-                                        href={`http://${server.ipAddress || server.hostname || 'localhost'}:${app.port}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-cyan-500/20 text-slate-300 hover:text-cyan-300 transition-colors"
-                                        title="Open Web Interface"
-                                      >
-                                        <ExternalLink className="w-3.5 h-3.5" />
-                                      </a>
-                                    )}
-
-                                    {canManage && (
-                                      <>
-                                        {isRunning ? (
-                                          <>
+                                      {canManage && (
+                                        <>
+                                          {isRunning ? (
+                                            <>
+                                              <button
+                                                id={`btn-restart-app-${app.id}`}
+                                                onClick={() => handleTriggerAppAction(app, 'restart')}
+                                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 transition-colors"
+                                                title="Restart Container"
+                                              >
+                                                <RotateCw className="w-3.5 h-3.5" />
+                                              </button>
+                                              <button
+                                                id={`btn-stop-app-${app.id}`}
+                                                onClick={() => handleTriggerAppAction(app, 'stop')}
+                                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 transition-colors"
+                                                title="Stop Container"
+                                              >
+                                                <Power className="w-3.5 h-3.5" />
+                                              </button>
+                                            </>
+                                          ) : (
                                             <button
-                                              id={`btn-restart-app-${app.id}`}
-                                              onClick={() => handleTriggerAppAction(app, 'restart')}
-                                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 transition-colors"
-                                              title="Restart Container"
-                                            >
-                                              <RotateCw className="w-3.5 h-3.5" />
-                                            </button>
-                                            <button
-                                              id={`btn-stop-app-${app.id}`}
-                                              onClick={() => handleTriggerAppAction(app, 'stop')}
-                                              className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 transition-colors"
-                                              title="Stop Container"
+                                              id={`btn-start-app-${app.id}`}
+                                              onClick={() => handleTriggerAppAction(app, 'start')}
+                                              className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
+                                              title="Start Container"
                                             >
                                               <Power className="w-3.5 h-3.5" />
                                             </button>
-                                          </>
-                                        ) : (
-                                          <button
-                                            id={`btn-start-app-${app.id}`}
-                                            onClick={() => handleTriggerAppAction(app, 'start')}
-                                            className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
-                                            title="Start Container"
-                                          >
-                                            <Power className="w-3.5 h-3.5" />
-                                          </button>
-                                        )}
-                                      </>
-                                    )}
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
             );
           })}

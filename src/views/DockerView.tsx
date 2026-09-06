@@ -33,6 +33,7 @@ export const DockerView: React.FC<DockerViewProps> = ({
   const { showToast } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'RUNNING' | 'EXITED'>('ALL');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   const [pendingContainerAction, setPendingContainerAction] = useState<{
     container: DockerContainer;
@@ -53,6 +54,18 @@ export const DockerView: React.FC<DockerViewProps> = ({
 
     return matchesSearch && matchesStatus;
   });
+
+  const handleRefreshClick = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.resolve(onRefresh());
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 500);
+    }
+  };
 
   const handleTriggerAction = (container: DockerContainer, action: 'start' | 'stop' | 'restart') => {
     setPendingContainerAction({ container, action });
@@ -85,11 +98,17 @@ export const DockerView: React.FC<DockerViewProps> = ({
 
         <button
           id="btn-refresh-docker"
-          onClick={onRefresh}
-          className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-colors self-start sm:self-auto"
+          disabled={isRefreshing}
+          onClick={handleRefreshClick}
+          className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all self-start sm:self-auto select-none ${
+            isRefreshing
+              ? 'opacity-75 cursor-not-allowed text-cyan-300 border-cyan-500/30'
+              : 'hover:bg-slate-800 hover:text-white active:scale-95'
+          }`}
+          title="Refresh Docker containers"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh Containers</span>
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+          <span>{isRefreshing ? 'Refreshing...' : 'Refresh Containers'}</span>
         </button>
       </div>
 

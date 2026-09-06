@@ -29,8 +29,21 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
 }) => {
   const safeHosts = hosts || [];
   const [selectedHostId, setSelectedHostId] = useState<string | null>(safeHosts[0]?.id || null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const selectedHost = safeHosts.find(h => h.id === selectedHostId) || safeHosts[0];
+
+  const handleRefreshClick = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.resolve(onRefresh());
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 500);
+    }
+  };
 
   return (
     <div className="space-y-6 pb-12 animate-in fade-in">
@@ -46,11 +59,17 @@ export const ESXiView: React.FC<ESXiViewProps> = ({
         <div className="flex items-center gap-3">
           <button
             id="btn-refresh-esxi"
-            onClick={onRefresh}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-colors"
+            disabled={isRefreshing}
+            onClick={handleRefreshClick}
+            className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all select-none ${
+              isRefreshing
+                ? 'opacity-75 cursor-not-allowed text-cyan-300 border-cyan-500/30'
+                : 'hover:bg-slate-800 hover:text-white active:scale-95'
+            }`}
+            title="Refresh ESXi hypervisors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Refresh</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+            <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
           </button>
 
           <button

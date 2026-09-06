@@ -36,6 +36,7 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'RUNNING' | 'STOPPED' | 'SUSPENDED'>('ALL');
   const [selectedVmForDetail, setSelectedVmForDetail] = useState<VirtualMachine | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // Power Action Confirmation State
   const [pendingAction, setPendingAction] = useState<{
@@ -54,6 +55,18 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
     const matchesStatus = statusFilter === 'ALL' || vm.powerState === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const handleRefreshClick = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.resolve(onRefresh());
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 500);
+    }
+  };
 
   const handleTriggerPowerAction = (vm: VirtualMachine, action: 'power-on' | 'power-off' | 'restart' | 'suspend') => {
     setPendingAction({ vm, action });
@@ -92,11 +105,17 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
 
         <button
           id="btn-refresh-vms"
-          onClick={onRefresh}
-          className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-colors self-start sm:self-auto"
+          disabled={isRefreshing}
+          onClick={handleRefreshClick}
+          className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all self-start sm:self-auto select-none ${
+            isRefreshing
+              ? 'opacity-75 cursor-not-allowed text-cyan-300 border-cyan-500/30'
+              : 'hover:bg-slate-800 hover:text-white active:scale-95'
+          }`}
+          title="Refresh virtual machine fleet"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh Fleet</span>
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+          <span>{isRefreshing ? 'Refreshing...' : 'Refresh Fleet'}</span>
         </button>
       </div>
 

@@ -275,113 +275,115 @@ const AppContent: React.FC = () => {
 
         {/* Viewport Router */}
         <main className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 max-w-7xl w-full mx-auto">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              summary={summary}
-              isLoading={isDataLoading}
-              onNavigate={setActiveTab}
-              onOpenAddConnection={() => setIsAddConnectionOpen(true)}
-              onAcknowledgeAlert={async (id) => {
-                await api.acknowledgeAlert(id);
-                loadAllData();
-              }}
-              canManage={canManage}
-            />
-          )}
+          <div key={activeTab} className="animate-page-enter">
+            {activeTab === 'dashboard' && (
+              <DashboardView
+                summary={summary}
+                isLoading={isDataLoading}
+                onNavigate={setActiveTab}
+                onOpenAddConnection={() => setIsAddConnectionOpen(true)}
+                onAcknowledgeAlert={async (id) => {
+                  await api.acknowledgeAlert(id);
+                  loadAllData();
+                }}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'infrastructure' && (
-            <InfrastructureView
-              connections={connections}
-              onRefresh={loadAllData}
-              onOpenAddModal={() => setIsAddConnectionOpen(true)}
-              canManage={canManage}
-            />
-          )}
+            {activeTab === 'infrastructure' && (
+              <InfrastructureView
+                connections={connections}
+                onRefresh={loadAllData}
+                onOpenAddModal={() => setIsAddConnectionOpen(true)}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'esxi' && (
-            <ESXiView
-              hosts={esxiHosts}
-              onRefresh={loadAllData}
-              onNavigateToVMs={() => setActiveTab('vms')}
-            />
-          )}
+            {activeTab === 'esxi' && (
+              <ESXiView
+                hosts={esxiHosts}
+                onRefresh={loadAllData}
+                onNavigateToVMs={() => setActiveTab('vms')}
+              />
+            )}
 
-          {activeTab === 'vms' && (
-            <VirtualMachinesView
-              vms={vms}
-              onRefresh={loadAllData}
-              canManage={canManage}
-            />
-          )}
+            {activeTab === 'vms' && (
+              <VirtualMachinesView
+                vms={vms}
+                onRefresh={loadAllData}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'casaos' && (
-            <CasaOSView
-              servers={casaosServers}
-              apps={casaosApps}
-              onRefresh={loadAllData}
-              canManage={canManage}
-            />
-          )}
+            {activeTab === 'casaos' && (
+              <CasaOSView
+                servers={casaosServers}
+                apps={casaosApps}
+                onRefresh={loadAllData}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'docker' && (
-            <DockerView
-              containers={dockerContainers}
-              onRefresh={loadAllData}
-              canManage={canManage}
-            />
-          )}
+            {activeTab === 'docker' && (
+              <DockerView
+                containers={dockerContainers}
+                onRefresh={loadAllData}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'servers' && (
-            <ServersView
-              connections={connections}
-              onRefresh={loadAllData}
-              onNavigateToNode={() => setActiveTab('infrastructure')}
-            />
-          )}
+            {activeTab === 'servers' && (
+              <ServersView
+                connections={connections}
+                onRefresh={loadAllData}
+                onNavigateToNode={() => setActiveTab('infrastructure')}
+              />
+            )}
 
-          {activeTab === 'storage' && (
-            <StorageView
-              hosts={esxiHosts}
-              servers={casaosServers}
-              onRefresh={loadAllData}
-            />
-          )}
+            {activeTab === 'storage' && (
+              <StorageView
+                hosts={esxiHosts}
+                servers={casaosServers}
+                onRefresh={loadAllData}
+              />
+            )}
 
-          {activeTab === 'network' && (
-            <NetworkView
-              hosts={esxiHosts}
-              onRefresh={loadAllData}
-            />
-          )}
+            {activeTab === 'network' && (
+              <NetworkView
+                hosts={esxiHosts}
+                onRefresh={loadAllData}
+              />
+            )}
 
-          {activeTab === 'monitoring' && (
-            <MonitoringView />
-          )}
+            {activeTab === 'monitoring' && (
+              <MonitoringView />
+            )}
 
-          {activeTab === 'alerts' && (
-            <AlertsView
-              alerts={alerts}
-              rules={alertRules}
-              onRefresh={loadAllData}
-              canManage={canManage}
-            />
-          )}
+            {activeTab === 'alerts' && (
+              <AlertsView
+                alerts={alerts}
+                rules={alertRules}
+                onRefresh={loadAllData}
+                canManage={canManage}
+              />
+            )}
 
-          {activeTab === 'logs' && (
-            <LogsView />
-          )}
+            {activeTab === 'logs' && (
+              <LogsView />
+            )}
 
-          {activeTab === 'tasks' && (
-            <TasksView />
-          )}
+            {activeTab === 'tasks' && (
+              <TasksView />
+            )}
 
-          {activeTab === 'users' && (
-            <UsersView />
-          )}
+            {activeTab === 'users' && (
+              <UsersView />
+            )}
 
-          {activeTab === 'settings' && (
-            <SettingsView />
-          )}
+            {activeTab === 'settings' && (
+              <SettingsView />
+            )}
+          </div>
         </main>
       </div>
 

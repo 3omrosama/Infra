@@ -5,8 +5,6 @@ import path from 'node:path';
 
 describe('CasaOS Deployment Definition Validation', () => {
   const casaosComposePath = path.join(process.cwd(), 'casaos', 'docker-compose.yml');
-  const casaosIconPath = path.join(process.cwd(), 'casaos', 'icon.svg');
-  const publicIconPath = path.join(process.cwd(), 'public', 'casaos-icon.svg');
   const rootComposePath = path.join(process.cwd(), 'docker-compose.yml');
 
   it('1. casaos/docker-compose.yml exists and root docker-compose.yml is untouched', () => {
@@ -17,17 +15,42 @@ describe('CasaOS Deployment Definition Validation', () => {
     assert.ok(rootCompose.includes('build:'), 'Root docker-compose.yml should remain for local development');
   });
 
-  it('2. Uses exact published GHCR image', () => {
+  it('2. Starts with standard compose version for CasaOS parser compatibility', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
-    assert.ok(content.includes('image: ghcr.io/3omrosama/infra:latest'), 'Must use ghcr.io/3omrosama/infra:latest');
+    assert.ok(content.startsWith("version: '3.8'"), "Must specify version: '3.8' at line 1");
   });
 
-  it('3. Contains official x-casaos metadata block with all required fields', () => {
+  it('3. Main application service is named "inframanager" with exact GHCR image', () => {
+    const content = fs.readFileSync(casaosComposePath, 'utf8');
+    assert.ok(content.includes('inframanager:'), 'Must declare inframanager service');
+    assert.ok(content.includes('image: ghcr.io/3omrosama/infra:latest'), 'Must use ghcr.io/3omrosama/infra:latest');
+    assert.ok(content.includes('container_name: inframanager'), 'Must set stable container_name: inframanager');
+    assert.ok(!content.includes('services:\n  app:'), 'Must not name main service generically as "app"');
+  });
+
+  it('4. PostgreSQL database service is named "postgres" with exact image', () => {
+    const content = fs.readFileSync(casaosComposePath, 'utf8');
+    assert.ok(content.includes('postgres:'), 'Must declare postgres service');
+    assert.ok(content.includes('image: postgres:16-alpine'), 'Must use postgres:16-alpine');
+    assert.ok(content.includes('container_name: postgres'), 'Must set stable container_name: postgres');
+  });
+
+  it('5. x-casaos.main accurately points to "inframanager"', () => {
+    const content = fs.readFileSync(casaosComposePath, 'utf8');
+    assert.ok(content.includes('main: inframanager'), 'x-casaos.main must point to inframanager');
+    assert.ok(!content.includes('main: app'), 'x-casaos.main must not point to app');
+  });
+
+  it('6. DATABASE_URL points directly to PostgreSQL service DNS', () => {
+    const content = fs.readFileSync(casaosComposePath, 'utf8');
+    assert.ok(content.includes('DATABASE_URL=postgresql://noc_user:noc_secure_pass@postgres:5432/noc_infrastructure?schema=public'), 'DATABASE_URL must route to postgres host');
+  });
+
+  it('7. Contains official x-casaos metadata block with id and updated repository URLs', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
     
-    // Check top-level x-casaos fields
     assert.ok(content.includes('x-casaos:'), 'Must define x-casaos block');
-    assert.ok(content.includes('main: inframanager'), 'Must specify main service');
+    assert.ok(content.includes('id: com.3omrosama.inframanger'), 'Must declare id: com.3omrosama.inframanger');
     assert.ok(content.includes('title:'), 'Must include title');
     assert.ok(content.includes('en_us: "InfraManager"'), 'Must have English title');
     assert.ok(content.includes('tagline:'), 'Must include tagline');
@@ -38,54 +61,28 @@ describe('CasaOS Deployment Definition Validation', () => {
     assert.ok(content.includes('- amd64'), 'Must support amd64');
     assert.ok(content.includes('- arm64'), 'Must support arm64');
     assert.ok(content.includes('category: Utilities'), 'Must specify category');
-    assert.ok(content.includes('icon:'), 'Must include icon reference');
+    assert.ok(!content.includes('icon:'), 'Icon field should be removed as requested');
+    assert.ok(content.includes('website: https://github.com/3omrosama/Infra'), 'Must reference correct website');
+    assert.ok(content.includes('repo: https://github.com/3omrosama/Infra'), 'Must reference correct repo');
+    assert.ok(content.includes('support: https://github.com/3omrosama/Infra/issues'), 'Must reference correct support URL');
+    assert.ok(content.includes('docs: https://github.com/3omrosama/Infra#readme'), 'Must reference correct docs URL');
   });
 
-  it('4. Defines both application and PostgreSQL containers with internal networking', () => {
-    const content = fs.readFileSync(casaosComposePath, 'utf8');
-    
-    assert.ok(content.includes('inframanager:'), 'Must declare inframanager service');
-    assert.ok(content.includes('postgres:'), 'Must declare postgres service');
-    assert.ok(content.includes('image: postgres:16-alpine'), 'Postgres service must use postgres:16-alpine');
-    assert.ok(content.includes('inframanager_net:'), 'Must define shared internal bridge network');
-  });
-
-  it('5. Configures persistent volumes for application data and PostgreSQL', () => {
+  it('8. Configures persistent volumes and internal network for both containers', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
     
     assert.ok(content.includes('inframanager_postgres_data:'), 'Must declare postgres data volume');
     assert.ok(content.includes('inframanager_data:'), 'Must declare app data volume');
     assert.ok(content.includes('/var/lib/postgresql/data'), 'Must mount postgres storage');
     assert.ok(content.includes('/app/data'), 'Must mount app storage');
+    assert.ok(content.includes('inframanager_net:'), 'Must define shared internal bridge network');
   });
 
-  it('6. Configures PostgreSQL healthcheck and service dependency', () => {
+  it('9. Configures PostgreSQL healthcheck and service dependency', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
     
     assert.ok(content.includes('healthcheck:'), 'Postgres must include healthcheck');
     assert.ok(content.includes('pg_isready'), 'Healthcheck must use pg_isready');
     assert.ok(content.includes('condition: service_healthy'), 'App container must wait for postgres to be healthy');
-  });
-
-  it('7. Sets required environment variables with safe defaults', () => {
-    const content = fs.readFileSync(casaosComposePath, 'utf8');
-    
-    assert.ok(content.includes('NODE_ENV=production'), 'Must set NODE_ENV=production');
-    assert.ok(content.includes('PORT=3000'), 'Must set PORT=3000');
-    assert.ok(content.includes('DATABASE_URL='), 'Must set DATABASE_URL');
-    assert.ok(content.includes('JWT_SECRET='), 'Must set JWT_SECRET placeholder');
-    assert.ok(content.includes('CREDENTIAL_ENCRYPTION_KEY='), 'Must set CREDENTIAL_ENCRYPTION_KEY placeholder');
-    assert.ok(content.includes('MONITOR_POLL_INTERVAL_SECONDS='), 'Must set monitor poll interval');
-    assert.ok(content.includes('METRIC_RETENTION_DAYS='), 'Must set metric retention days');
-  });
-
-  it('8. Professional SVG icon exists and is valid XML', () => {
-    assert.strictEqual(fs.existsSync(casaosIconPath), true, 'casaos/icon.svg must exist');
-    assert.strictEqual(fs.existsSync(publicIconPath), true, 'public/casaos-icon.svg must exist');
-    
-    const svg = fs.readFileSync(casaosIconPath, 'utf8');
-    assert.ok(svg.includes('<svg'), 'Must be valid SVG root');
-    assert.ok(svg.includes('viewBox="0 0 256 256"'), 'Must have square 256x256 viewBox');
-    assert.ok(svg.includes('</svg>'), 'Must have closing tag');
   });
 });

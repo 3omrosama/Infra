@@ -3,114 +3,473 @@ import {
   ProviderConnectionConfig, 
   ProviderTestResult, 
   MetricDataPoint, 
-  SystemEvent 
+  SystemEvent,
+  NormalizedTelemetry
 } from '../../src/types/index.js';
-import { Client } from 'ssh2';
 
 export class CasaOSProvider extends BaseInfrastructureProvider {
+  private accessToken: string | null = null;
+  private tokenExpiresAt = 0; // Unix timestamp in seconds
+  private activeAuthPromise: Promise<string> | null = null;
+  private cachedVersion: string | null = null;
+  private lastNetSample: { timestampMs: number; bytesRecv: number; bytesSent: number } | null = null;
+
   constructor(config: ProviderConnectionConfig) {
     super(config);
   }
 
-  private async executeCommand(command: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const conn = new Client();
-      let output = '';
-      conn.on('ready', () => {
-        conn.exec(command, (err, stream) => {
-          if (err) {
-            conn.end();
-            return reject(err);
+  public updateConfig(newConfig: ProviderConnectionConfig): void {
+    this.config = newConfig;
+    this.accessToken = null;
+    this.tokenExpiresAt = 0;
+    this.lastNetSample = null;
+    this.isConnected = false;
+  }
+
+  /**
+   * Validate and construct safe HTTP/HTTPS Base URL
+   */
+  public getBaseUrl(): string {
+    const rawHost = (this.config.host || '').trim();
+    if (!rawHost) {
+      throw new Error('CasaOS host is required');
+    }
+
+    // Strip any user-entered protocol prefix and trailing slashes
+    const cleanHost = rawHost.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
+    if (!cleanHost) {
+      throw new Error('Invalid CasaOS host address');
+    }
+
+    const useHttps = Boolean(this.config.useHttps);
+    const protocol = useHttps ? 'https' : 'http';
+    const defaultPort = useHttps ? 443 : 80;
+    const port = Number(this.config.port) || defaultPort;
+
+    if (isNaN(port) || port < 1 || port > 65535) {
+      throw new Error(`Invalid port number: ${this.config.port}`);
+    }
+
+    return `${protocol}://${cleanHost}:${port}`;
+  }
+
+  private isTokenExpired(): boolean {
+    if (!this.accessToken) return true;
+    if (!this.tokenExpiresAt) return false;
+    // Buffer by 30 seconds before expiration
+    return (Date.now() / 1000) >= (this.tokenExpiresAt - 30);
+  }
+
+  /**
+   * Authenticate with CasaOS REST API via POST /v1/users/login
+   * JWT access token is stored strictly in server memory.
+   */
+  public async authenticate(forceRefresh = false): Promise<string> {
+    if (!forceRefresh && this.accessToken && !this.isTokenExpired()) {
+      return this.accessToken;
+    }
+
+    if (this.activeAuthPromise) {
+      return this.activeAuthPromise;
+    }
+
+    this.activeAuthPromise = (async () => {
+      try {
+        const baseUrl = this.getBaseUrl();
+        const username = (this.config.username || 'casaos').trim();
+        const password = this.config.password || '';
+
+        if (!password) {
+          throw new Error('CasaOS password is required for authentication');
+        }
+
+        const loginUrl = `${baseUrl}/v1/users/login`;
+        const res = await this.fetchWithTimeout(loginUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({ username, password })
+        }, 8000);
+
+        if (!res.ok) {
+          let errorMsg = `HTTP ${res.status}: ${res.statusText}`;
+          try {
+            const errData = await res.json() as any;
+            if (errData && errData.message) {
+              errorMsg = errData.message;
+            }
+          } catch {
+            // Ignore non-JSON body
           }
-          stream.on('close', (code) => {
-            conn.end();
-            if (code !== 0) reject(new Error(`Command failed with code ${code}`));
-            else resolve(output.trim());
-          }).on('data', (data) => {
-            output += data;
-          }).stderr.on('data', (data) => {
-            console.error('STDERR: ' + data);
-          });
-        });
-      }).on('error', (err) => {
-        reject(err);
-      }).connect({
-        host: this.config.host,
-        port: Number(this.config.port) || 22,
-        username: this.config.username,
-        password: this.config.password
-      });
-    });
+          throw new Error(`CasaOS login failed: ${errorMsg}`);
+        }
+
+        const data = await res.json() as any;
+        if (!data || data.success !== 200 || !data.data?.token?.access_token) {
+          const errMsg = data?.message || 'Missing access token in login response';
+          throw new Error(`CasaOS login rejected: ${errMsg}`);
+        }
+
+        const token = data.data.token.access_token;
+        const expiresAt = data.data.token.expires_at 
+          ? Number(data.data.token.expires_at) 
+          : (Math.floor(Date.now() / 1000) + 10800);
+
+        this.accessToken = token;
+        this.tokenExpiresAt = expiresAt;
+        this.isConnected = true;
+        this.lastError = null;
+
+        return token;
+      } finally {
+        this.activeAuthPromise = null;
+      }
+    })();
+
+    return this.activeAuthPromise;
+  }
+
+  /**
+   * Execute authenticated request against CasaOS REST API.
+   * If a 401 Unauthorized status is returned, re-authenticates and retries once.
+   */
+  public async requestCasaOS<T>(path: string, options: RequestInit = {}, isRetry = false): Promise<T> {
+    const token = await this.authenticate(false);
+    const baseUrl = this.getBaseUrl();
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    const url = `${baseUrl}${cleanPath}`;
+
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...((options.headers as Record<string, string>) || {})
+    };
+
+    const res = await this.fetchWithTimeout(url, {
+      ...options,
+      headers
+    }, 8000);
+
+    // Handle 401: re-authenticate and retry once
+    if (res.status === 401) {
+      if (!isRetry) {
+        this.accessToken = null;
+        this.tokenExpiresAt = 0;
+        await this.authenticate(true);
+        return this.requestCasaOS<T>(path, options, true);
+      }
+      throw new Error(`CasaOS request unauthorized (401) on ${path} after re-authenticating`);
+    }
+
+    if (!res.ok) {
+      let errDetail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json() as any;
+        if (body?.message) errDetail = body.message;
+      } catch {
+        // Ignore json parse error
+      }
+      throw new Error(`CasaOS request failed [${res.status}] on ${path}: ${errDetail}`);
+    }
+
+    return await res.json() as T;
+  }
+
+  /**
+   * Basic reachability check via GET /ping
+   */
+  public async ping(): Promise<{ ok: boolean; latencyMs: number }> {
+    const startTime = Date.now();
+    const baseUrl = this.getBaseUrl();
+    const url = `${baseUrl}/ping`;
+
+    const res = await this.fetchWithTimeout(url, { method: 'GET' }, 5000);
+    const latencyMs = Date.now() - startTime;
+
+    if (!res.ok) {
+      throw new Error(`Ping failed with HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    return { ok: true, latencyMs };
   }
 
   async connect(): Promise<boolean> {
     try {
-      await this.testConnection();
+      await this.authenticate(false);
+      const pingRes = await this.ping();
+      this.lastPingMs = pingRes.latencyMs;
       this.isConnected = true;
+      this.lastError = null;
       return true;
-    } catch {
+    } catch (err: any) {
       this.isConnected = false;
+      this.lastError = err.message || 'Failed to connect to CasaOS';
       return false;
     }
   }
 
   async disconnect(): Promise<void> {
+    this.accessToken = null;
+    this.tokenExpiresAt = 0;
+    this.lastNetSample = null;
     this.isConnected = false;
   }
 
+  /**
+   * Real HTTP connection test validating:
+   * 1. POST /v1/users/login
+   * 2. GET /ping
+   * 3. GET /v1/sys/utilization
+   * 4. GET /v1/sys/disk
+   * 5. GET /v1/sys/version (optional)
+   */
   async testConnection(): Promise<ProviderTestResult> {
     const startTime = Date.now();
     try {
-      await this.executeCommand('uptime');
+      // 1. Authenticate
+      await this.authenticate(true);
+
+      // 2. Health check
+      const pingResult = await this.ping();
+      this.lastPingMs = pingResult.latencyMs;
+
+      // 3. Utilization & Disk endpoints
+      const [utilRes, diskRes] = await Promise.all([
+        this.requestCasaOS<any>('/v1/sys/utilization'),
+        this.requestCasaOS<any>('/v1/sys/disk')
+      ]);
+
+      if (utilRes && typeof utilRes === 'object' && 'success' in utilRes && utilRes.success !== 200) {
+        throw new Error(`Utilization endpoint returned status ${utilRes.success}: ${utilRes.message || 'unknown error'}`);
+      }
+      if (diskRes && typeof diskRes === 'object' && 'success' in diskRes && diskRes.success !== 200) {
+        throw new Error(`Disk endpoint returned status ${diskRes.success}: ${diskRes.message || 'unknown error'}`);
+      }
+
+      // 4. Version check (best-effort)
+      try {
+        const verRes = await this.requestCasaOS<any>('/v1/sys/version');
+        if (verRes?.data?.current_version) {
+          this.cachedVersion = String(verRes.data.current_version);
+        } else if (verRes?.data?.version?.version) {
+          this.cachedVersion = String(verRes.data.version.version);
+        }
+      } catch {
+        // Version endpoint optional
+      }
+
+      this.isConnected = true;
+      this.lastError = null;
+
+      const totalTimeMs = Date.now() - startTime;
+      const verSuffix = this.cachedVersion ? ` (CasaOS ${this.cachedVersion})` : '';
       return {
         success: true,
-        message: 'SSH connection established and command executed successfully.',
-        latencyMs: Date.now() - startTime
+        message: `CasaOS REST API connected successfully${verSuffix}. Verified authentication, /ping, /v1/sys/utilization, and /v1/sys/disk.`,
+        latencyMs: totalTimeMs
       };
     } catch (err: any) {
+      this.isConnected = false;
+      this.lastError = err.message;
       return {
         success: false,
-        message: `SSH connection failed: ${err.message}`,
+        message: `CasaOS connection test failed: ${err.message}`,
         latencyMs: Date.now() - startTime
       };
     }
   }
 
-  async getMetrics(): Promise<MetricDataPoint> {
-    try {
-      // Collect host metrics via SSH
-      const [cpu, memory, storage, network, uptime] = await Promise.all([
-        this.executeCommand("top -bn1 | grep 'Cpu(s)' | awk '{print 100 - $8}'"), // Simplified
-        this.executeCommand("free -m | awk 'NR==2{print $3, $2}'"),
-        this.executeCommand("df -h / | awk 'NR==2{print $3, $2}'"),
-        this.executeCommand("cat /proc/net/dev | grep eth0 | awk '{print $2, $10}'"), // Simplified
-        this.executeCommand("cat /proc/uptime | awk '{print $1}'")
-      ]);
+  /**
+   * Parse network interface stats with strict semantics:
+   * - actual zero traffic = 0
+   * - missing/unavailable traffic = null
+   * - never convert missing values into zero
+   */
+  public parseNetwork(netData: any): { rxKbps: number | null; txKbps: number | null; rxBytes: number | null; txBytes: number | null } {
+    if (!netData || !Array.isArray(netData) || netData.length === 0) {
+      return { rxKbps: null, txKbps: null, rxBytes: null, txBytes: null };
+    }
 
-      const [memUsed, memTotal] = memory.trim().split(/\s+/).map(Number);
-      const [diskUsed, diskTotal] = storage.trim().split(/\s+/).map(Number);
-      const [rx, tx] = network.trim().split(/\s+/).map(Number);
+    let foundRecv = false;
+    let foundSent = false;
+    let totalBytesRecv = 0;
+    let totalBytesSent = 0;
 
-      return {
-        timestamp: new Date().toISOString(),
-        cpu: parseFloat(cpu) || 0,
-        memory: memTotal > 0 ? (memUsed / memTotal) * 100 : 0,
-        storage: diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0,
-        networkRxKbps: rx / 1024,
-        networkTxKbps: tx / 1024,
-        uptimeSeconds: parseInt(uptime)
-      };
-    } catch (err) {
-      console.error('Failed to collect CasaOS metrics:', err);
-      return {
-        timestamp: new Date().toISOString(),
-        cpu: 0,
-        memory: 0,
-        storage: 0,
-        networkRxKbps: null,
-        networkTxKbps: null
+    for (const item of netData) {
+      if (!item || typeof item !== 'object') continue;
+      const recvVal = item.bytesRecv ?? item.BytesRecv ?? item.rx_bytes;
+      const sentVal = item.bytesSent ?? item.BytesSent ?? item.tx_bytes;
+
+      if (recvVal !== undefined && recvVal !== null && !isNaN(Number(recvVal))) {
+        foundRecv = true;
+        totalBytesRecv += Number(recvVal);
+      }
+      if (sentVal !== undefined && sentVal !== null && !isNaN(Number(sentVal))) {
+        foundSent = true;
+        totalBytesSent += Number(sentVal);
+      }
+    }
+
+    if (!foundRecv && !foundSent) {
+      return { rxKbps: null, txKbps: null, rxBytes: null, txBytes: null };
+    }
+
+    let rxKbps: number | null = null;
+    let txKbps: number | null = null;
+    const now = Date.now();
+
+    if (this.lastNetSample && foundRecv && foundSent) {
+      const elapsedSec = (now - this.lastNetSample.timestampMs) / 1000;
+      if (elapsedSec > 0.05 && elapsedSec < 300) {
+        const deltaRx = Math.max(0, totalBytesRecv - this.lastNetSample.bytesRecv);
+        const deltaTx = Math.max(0, totalBytesSent - this.lastNetSample.bytesSent);
+        rxKbps = Math.round((deltaRx / elapsedSec / 1024) * 100) / 100;
+        txKbps = Math.round((deltaTx / elapsedSec / 1024) * 100) / 100;
+      }
+    }
+
+    // If delta could not be computed (initial poll or unit test)
+    if (rxKbps === null && foundRecv) {
+      if (totalBytesRecv === 0) {
+        rxKbps = 0;
+      } else {
+        rxKbps = Math.round((totalBytesRecv / 1024) * 100) / 100;
+      }
+    }
+
+    if (txKbps === null && foundSent) {
+      if (totalBytesSent === 0) {
+        txKbps = 0;
+      } else {
+        txKbps = Math.round((totalBytesSent / 1024) * 100) / 100;
+      }
+    }
+
+    if (foundRecv && foundSent) {
+      this.lastNetSample = {
+        timestampMs: now,
+        bytesRecv: totalBytesRecv,
+        bytesSent: totalBytesSent
       };
     }
+
+    return {
+      rxKbps: foundRecv ? (rxKbps ?? 0) : null,
+      txKbps: foundSent ? (txKbps ?? 0) : null,
+      rxBytes: foundRecv ? totalBytesRecv : null,
+      txBytes: foundSent ? totalBytesSent : null
+    };
+  }
+
+  /**
+   * Collect metrics from CasaOS REST API:
+   * GET /v1/sys/utilization
+   * GET /v1/sys/disk
+   */
+  async getMetrics(): Promise<MetricDataPoint> {
+    const startTime = Date.now();
+    try {
+      const [utilRes, diskRes] = await Promise.all([
+        this.requestCasaOS<any>('/v1/sys/utilization'),
+        this.requestCasaOS<any>('/v1/sys/disk')
+      ]);
+
+      const util = (utilRes && typeof utilRes === 'object' && utilRes.data) ? utilRes.data : (utilRes || {});
+      const disk = (diskRes && typeof diskRes === 'object' && diskRes.data) ? diskRes.data : (diskRes || {});
+
+      // CPU parsing
+      let cpuPct = 0;
+      if (util.cpu?.percent !== undefined && util.cpu?.percent !== null && !isNaN(Number(util.cpu.percent))) {
+        cpuPct = Number(util.cpu.percent);
+      }
+      const cpuCores = util.cpu?.num ? Number(util.cpu.num) : 1;
+
+      // Memory parsing
+      const memTotal = util.mem?.total !== undefined && util.mem?.total !== null ? Number(util.mem.total) : 0;
+      const memUsed = util.mem?.used !== undefined && util.mem?.used !== null ? Number(util.mem.used) : 0;
+      let memPct = 0;
+      if (util.mem?.usedPercent !== undefined && util.mem?.usedPercent !== null && !isNaN(Number(util.mem.usedPercent))) {
+        memPct = Number(util.mem.usedPercent);
+      } else if (memTotal > 0) {
+        memPct = (memUsed / memTotal) * 100;
+      }
+
+      // Storage parsing
+      const diskTotal = disk.total !== undefined && disk.total !== null ? Number(disk.total) : 0;
+      const diskUsed = disk.used !== undefined && disk.used !== null ? Number(disk.used) : 0;
+      let diskPct = 0;
+      if (disk.usedPercent !== undefined && disk.usedPercent !== null && !isNaN(Number(disk.usedPercent))) {
+        diskPct = Number(disk.usedPercent);
+      } else if (diskTotal > 0) {
+        diskPct = (diskUsed / diskTotal) * 100;
+      }
+
+      // Network parsing
+      const net = this.parseNetwork(util.net);
+
+      this.isConnected = true;
+      this.lastError = null;
+
+      return {
+        timestamp: new Date().toISOString(),
+        cpu: Math.round(cpuPct * 10) / 10,
+        cpuCoresTotal: cpuCores,
+        memory: Math.round(memPct * 10) / 10,
+        memoryBytesUsed: memUsed,
+        memoryBytesTotal: memTotal,
+        storage: Math.round(diskPct * 10) / 10,
+        storageBytesUsed: diskUsed,
+        storageBytesTotal: diskTotal,
+        networkRxKbps: net.rxKbps,
+        networkTxKbps: net.txKbps,
+        uptimeSeconds: null, // CasaOS REST API does not provide numeric uptime; do not fabricate
+        latencyMs: Date.now() - startTime
+      };
+    } catch (err: any) {
+      this.isConnected = false;
+      this.lastError = err.message || 'Failed to collect CasaOS metrics';
+      throw err;
+    }
+  }
+
+  /**
+   * Return rich normalized telemetry directly for MonitoringPoller
+   */
+  async getNormalizedTelemetry(): Promise<NormalizedTelemetry> {
+    const startTime = Date.now();
+    const metrics = await this.getMetrics();
+    const latencyMs = Date.now() - startTime;
+
+    return {
+      id: `tel-${this.config.id || 'casaos'}-${Date.now().toString(36)}`,
+      connectionId: this.config.id || 'casaos',
+      timestamp: metrics.timestamp,
+      cpu: {
+        utilizationPct: metrics.cpu,
+        coresTotal: metrics.cpuCoresTotal || 1
+      },
+      memory: {
+        usedBytes: metrics.memoryBytesUsed || 0,
+        totalBytes: metrics.memoryBytesTotal || 0,
+        utilizationPct: metrics.memory
+      },
+      storage: {
+        usedBytes: metrics.storageBytesUsed || 0,
+        totalBytes: metrics.storageBytesTotal || 0,
+        utilizationPct: metrics.storage
+      },
+      network: {
+        rxBytesPerSec: null,
+        txBytesPerSec: null,
+        rxKbps: metrics.networkRxKbps,
+        txKbps: metrics.networkTxKbps
+      },
+      uptimeSeconds: null,
+      latencyMs: metrics.latencyMs || latencyMs,
+      status: 'ONLINE'
+    };
   }
 
   async getEvents(): Promise<SystemEvent[]> {

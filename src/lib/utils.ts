@@ -14,8 +14,9 @@ export function formatBytes(bytes: number, decimals = 2): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-export function formatUptime(seconds: number): string {
-  if (!seconds || seconds === 0) return '0s';
+export function formatUptime(seconds?: number | null): string {
+  if (seconds === null || seconds === undefined) return 'N/A';
+  if (seconds === 0) return '0s';
   const days = Math.floor(seconds / (3600 * 24));
   const hours = Math.floor((seconds % (3600 * 24)) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -25,8 +26,9 @@ export function formatUptime(seconds: number): string {
   return `${minutes}m`;
 }
 
-export function formatNetworkSpeed(kbps: number): string {
-  if (!kbps || kbps === 0) return '0 Kbps';
+export function formatNetworkSpeed(kbps?: number | null): string {
+  if (kbps === null || kbps === undefined) return 'N/A';
+  if (kbps === 0) return '0 Kbps';
   if (kbps >= 1000000) return (kbps / 1000000).toFixed(2) + ' Gbps';
   if (kbps >= 1000) return (kbps / 1000).toFixed(1) + ' Mbps';
   return kbps.toFixed(0) + ' Kbps';

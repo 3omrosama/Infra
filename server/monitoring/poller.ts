@@ -92,7 +92,7 @@ class MonitoringPoller {
             rxKbps: metrics.networkRxKbps,
             txKbps: metrics.networkTxKbps
           },
-          uptimeSeconds: metrics.uptimeSeconds || 0,
+          uptimeSeconds: metrics.uptimeSeconds != null ? metrics.uptimeSeconds : null,
           latencyMs: metrics.latencyMs || 0,
           status: 'ONLINE'
         };
@@ -149,8 +149,8 @@ class MonitoringPoller {
             cpu: telemetry.cpu.utilizationPct,
             memory: telemetry.memory.utilizationPct,
             storage: telemetry.storage.utilizationPct,
-            networkRxKbps: telemetry.network.rxKbps || 0,
-            networkTxKbps: telemetry.network.txKbps || 0
+            networkRxKbps: telemetry.network.rxKbps,
+            networkTxKbps: telemetry.network.txKbps
           }
         });
 

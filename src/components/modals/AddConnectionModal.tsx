@@ -120,6 +120,8 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     setUseHttps(https);
     if (type === 'ESXI') {
       setPort(https ? '443' : '80');
+    } else if (type === 'CASAOS') {
+      setPort(https ? '443' : '80');
     }
   };
 
@@ -417,7 +419,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                 <input
                   id="input-conn-username"
                   type="text"
-                  placeholder={type === 'ESXI' ? 'root' : 'admin'}
+                  placeholder={type === 'ESXI' ? 'root' : (type === 'CASAOS' ? 'casaos' : 'admin')}
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500"
@@ -432,7 +434,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
                   <input
                     id="input-conn-password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder={isEditMode ? '••••••••••••' : 'ESXi root password'}
+                    placeholder={isEditMode ? '••••••••••••' : (type === 'CASAOS' ? 'CasaOS password' : 'ESXi root password')}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-cyan-500 pr-9"
@@ -449,7 +451,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               </div>
             </div>
 
-            {(type === 'CASAOS' || type === 'DOCKER' || type === 'PROXMOX') && (
+            {(type === 'DOCKER' || type === 'PROXMOX') && (
               <div>
                 <label className="text-xs text-slate-400 block mb-1">API Token / Secret Key (Optional)</label>
                 <input

@@ -234,8 +234,8 @@ export interface MetricDataPoint {
   storage: number;
   storageBytesUsed?: number | null;
   storageBytesTotal?: number | null;
-  networkRxKbps: number;
-  networkTxKbps: number;
+  networkRxKbps: number | null;
+  networkTxKbps: number | null;
   uptimeSeconds?: number | null;
   latencyMs?: number | null;
 }
@@ -278,7 +278,7 @@ export interface NormalizedTelemetry {
     usedBytes: number;
     usagePct: number;
   }[];
-  uptimeSeconds: number;
+  uptimeSeconds: number | null;
   latencyMs: number;
   status: 'ONLINE' | 'DEGRADED' | 'OFFLINE';
 }

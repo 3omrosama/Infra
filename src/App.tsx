@@ -274,8 +274,9 @@ const AppContent: React.FC = () => {
         />
 
         {/* Viewport Router */}
-        <main className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 max-w-7xl w-full mx-auto">
-          <div key={activeTab} className="animate-page-enter">
+        <main className="flex-1 overflow-y-auto min-w-0">
+          <div className="max-w-7xl w-full mx-auto px-4 sm:px-8 py-6">
+            <div key={activeTab} className="animate-page-enter">
             {activeTab === 'dashboard' && (
               <DashboardView
                 summary={summary}
@@ -383,6 +384,7 @@ const AppContent: React.FC = () => {
             {activeTab === 'settings' && (
               <SettingsView />
             )}
+          </div>
           </div>
         </main>
       </div>

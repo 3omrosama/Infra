@@ -130,6 +130,23 @@ const AppContent: React.FC = () => {
         };
       });
     }
+
+    if (lastMetric?.connectionId) {
+      setCasaosServers(prevServers =>
+        prevServers.map(server => {
+          if (server.connectionId !== lastMetric.connectionId) {
+            return server;
+          }
+          return {
+            ...server,
+            cpuUsagePct: lastMetric.cpu ?? server.cpuUsagePct,
+            memoryUsagePct: lastMetric.memory ?? server.memoryUsagePct,
+            storageUsagePct: lastMetric.storage ?? server.storageUsagePct,
+            uptimeSeconds: lastMetric.uptimeSeconds ?? server.uptimeSeconds
+          };
+        })
+      );
+    }
   }, [lastMetric, summary?.hasLiveInfrastructure, summary?.isDemoMode]);
 
   // Handle Real-time Alerts from Socket

@@ -73,7 +73,7 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
   };
 
   const handleExecuteConfirmedAction = async (reason?: string) => {
-    if (!pendingAction) return;
+    if (!pendingAction || isExecutingAction) return;
     const { vm, action } = pendingAction;
     setIsExecutingAction(true);
 
@@ -329,10 +329,16 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
           title={`Confirm '${pendingAction.action.toUpperCase()}' on ${pendingAction.vm.name}`}
           message={`Are you sure you want to execute '${pendingAction.action}' on virtual machine '${pendingAction.vm.name}'? This action will be logged in the immutable security audit trail.`}
           confirmLabel={`Execute ${pendingAction.action}`}
+          loadingLabel={`Executing ${pendingAction.action}...`}
+          isLoading={isExecutingAction}
           isDestructive={pendingAction.action === 'power-off'}
           requireReason={true}
           onConfirm={handleExecuteConfirmedAction}
-          onCancel={() => setPendingAction(null)}
+          onCancel={() => {
+            if (!isExecutingAction) {
+              setPendingAction(null);
+            }
+          }}
         />
       )}
     </div>

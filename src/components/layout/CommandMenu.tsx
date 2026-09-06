@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Search, 
   Server, 
@@ -71,10 +72,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
     a.category.toLowerCase().includes(query.toLowerCase())
   );
 
-  return (
+  const modalNode = (
     <div 
       onClick={handleBackdropClick}
-      className={`fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-black/75 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+      className={`fixed inset-0 z-50 flex items-start justify-center pt-20 sm:pt-24 p-4 sm:p-6 bg-black/75 backdrop-blur-sm overflow-y-auto transition-opacity duration-200 ease-out motion-reduce:transition-none ${
         isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       role="dialog"
@@ -83,7 +84,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
     >
       <div 
         id="global-command-palette-modal"
-        className={getCardClass("w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden")}
+        className={getCardClass("w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden my-auto sm:my-0 max-h-[calc(100vh-6rem)] flex flex-col")}
         onClick={e => e.stopPropagation()}
       >
         {/* Search Input */}
@@ -108,7 +109,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
         </div>
 
         {/* Results list */}
-        <div className="max-h-96 overflow-y-auto p-2 space-y-1">
+        <div className="max-h-96 overflow-y-auto p-2 space-y-1 flex-1">
           {filtered.length === 0 ? (
             <div className="p-8 text-center text-sm text-slate-500">
               No matching commands or resources found for "{query}"
@@ -151,4 +152,6 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
 };

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Cpu, 
   HardDrive, 
@@ -62,10 +63,10 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
     { time: 'Now', cpu: currentVm.cpuUsagePct, memory: currentVm.memoryUsagePct }
   ];
 
-  return (
+  const modalNode = (
     <div 
       onClick={handleBackdropClick}
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/75 backdrop-blur-sm overflow-y-auto transition-opacity duration-200 ease-out motion-reduce:transition-none ${
         isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       role="dialog"
@@ -74,7 +75,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
     >
       <div 
         id="vm-detail-modal"
-        className={getCardClass("w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]")}
+        className={getCardClass("w-full max-w-3xl my-auto bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100vh-2rem)] sm:max-h-[90vh]")}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -309,5 +310,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalNode, document.body) : modalNode;
 };
 

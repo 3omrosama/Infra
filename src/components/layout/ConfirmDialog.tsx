@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, X, ShieldAlert, Loader2 } from 'lucide-react';
 import { useModalAnimation } from '../../hooks/useModalAnimation';
 
@@ -90,10 +91,10 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     ? (content.loadingLabel || `${content.confirmLabel.replace(/^Execute\s+/i, 'Executing ')}...`)
     : content.confirmLabel;
 
-  return (
+  const dialogNode = (
     <div 
       onClick={onBackdrop}
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/75 backdrop-blur-sm overflow-y-auto transition-opacity duration-200 ease-out motion-reduce:transition-none ${
         isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
       }`}
       role="dialog"
@@ -103,7 +104,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     >
       <div 
         id="confirm-dialog-modal"
-        className={getCardClass("w-full max-w-lg bg-slate-900 border border-slate-700/70 rounded-2xl p-6 shadow-2xl space-y-5")}
+        className={getCardClass("w-full max-w-lg my-auto max-h-[calc(100vh-2rem)] sm:max-h-[calc(100vh-3rem)] overflow-y-auto bg-slate-900 border border-slate-700/70 rounded-2xl p-6 shadow-2xl space-y-5")}
+        onClick={e => e.stopPropagation()}
       >
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
@@ -197,4 +199,6 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(dialogNode, document.body) : dialogNode;
 };

@@ -311,6 +311,8 @@ const AppContent: React.FC = () => {
             {activeTab === 'vms' && (
               <VirtualMachinesView
                 vms={vms}
+                hosts={esxiHosts}
+                connections={connections}
                 onRefresh={loadAllData}
                 canManage={canManage}
               />

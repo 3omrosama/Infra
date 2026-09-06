@@ -82,9 +82,9 @@ class MonitoringPoller {
             utilizationPct: metrics.memory
           },
           storage: {
-            usedBytes: metrics.storageBytesUsed || 0,
-            totalBytes: metrics.storageBytesTotal || 0,
-            utilizationPct: metrics.storage
+            usedBytes: metrics.storageBytesUsed != null ? metrics.storageBytesUsed : null,
+            totalBytes: metrics.storageBytesTotal != null ? metrics.storageBytesTotal : null,
+            utilizationPct: metrics.storage != null ? metrics.storage : null
           },
           network: {
             rxBytesPerSec: null,
@@ -205,7 +205,7 @@ class MonitoringPoller {
         if (tel && tel.status === 'ONLINE') {
           totalCpu += tel.cpu.utilizationPct;
           totalMem += tel.memory.utilizationPct;
-          totalStorage += tel.storage.utilizationPct;
+          totalStorage += (tel.storage.utilizationPct || 0);
           rxRateTotal += tel.network.rxKbps || 0;
           txRateTotal += tel.network.txKbps || 0;
           nodeCount++;

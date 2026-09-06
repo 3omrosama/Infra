@@ -222,8 +222,7 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
    * 1. POST /v1/users/login
    * 2. GET /ping
    * 3. GET /v1/sys/utilization
-   * 4. GET /v1/sys/disk
-   * 5. GET /v1/sys/version (optional)
+   * 4. GET /v1/sys/version (optional)
    */
   async testConnection(): Promise<ProviderTestResult> {
     const startTime = Date.now();
@@ -235,17 +234,11 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
       const pingResult = await this.ping();
       this.lastPingMs = pingResult.latencyMs;
 
-      // 3. Utilization & Disk endpoints
-      const [utilRes, diskRes] = await Promise.all([
-        this.requestCasaOS<any>('/v1/sys/utilization'),
-        this.requestCasaOS<any>('/v1/sys/disk')
-      ]);
+      // 3. Utilization endpoint
+      const utilRes = await this.requestCasaOS<any>('/v1/sys/utilization');
 
       if (utilRes && typeof utilRes === 'object' && 'success' in utilRes && utilRes.success !== 200) {
         throw new Error(`Utilization endpoint returned status ${utilRes.success}: ${utilRes.message || 'unknown error'}`);
-      }
-      if (diskRes && typeof diskRes === 'object' && 'success' in diskRes && diskRes.success !== 200) {
-        throw new Error(`Disk endpoint returned status ${diskRes.success}: ${diskRes.message || 'unknown error'}`);
       }
 
       // 4. Version check (best-effort)
@@ -267,7 +260,7 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
       const verSuffix = this.cachedVersion ? ` (CasaOS ${this.cachedVersion})` : '';
       return {
         success: true,
-        message: `CasaOS REST API connected successfully${verSuffix}. Verified authentication, /ping, /v1/sys/utilization, and /v1/sys/disk.`,
+        message: `CasaOS REST API connected successfully${verSuffix}. Verified authentication, /ping, and /v1/sys/utilization.`,
         latencyMs: totalTimeMs
       };
     } catch (err: any) {
@@ -366,18 +359,12 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
   /**
    * Collect metrics from CasaOS REST API:
    * GET /v1/sys/utilization
-   * GET /v1/sys/disk
    */
   async getMetrics(): Promise<MetricDataPoint> {
     const startTime = Date.now();
     try {
-      const [utilRes, diskRes] = await Promise.all([
-        this.requestCasaOS<any>('/v1/sys/utilization'),
-        this.requestCasaOS<any>('/v1/sys/disk')
-      ]);
-
+      const utilRes = await this.requestCasaOS<any>('/v1/sys/utilization');
       const util = (utilRes && typeof utilRes === 'object' && utilRes.data) ? utilRes.data : (utilRes || {});
-      const disk = (diskRes && typeof diskRes === 'object' && diskRes.data) ? diskRes.data : (diskRes || {});
 
       // CPU parsing
       let cpuPct = 0;
@@ -396,14 +383,29 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
         memPct = (memUsed / memTotal) * 100;
       }
 
-      // Storage parsing
-      const diskTotal = disk.total !== undefined && disk.total !== null ? Number(disk.total) : 0;
-      const diskUsed = disk.used !== undefined && disk.used !== null ? Number(disk.used) : 0;
-      let diskPct = 0;
-      if (disk.usedPercent !== undefined && disk.usedPercent !== null && !isNaN(Number(disk.usedPercent))) {
-        diskPct = Number(disk.usedPercent);
-      } else if (diskTotal > 0) {
-        diskPct = (diskUsed / diskTotal) * 100;
+      // Storage parsing from util.sys_disk
+      // Expected fields: size, used, avail, health
+      const sysDisk = util.sys_disk;
+      let storageBytesTotal: number | null = null;
+      let storageBytesUsed: number | null = null;
+      let storagePct: number | null = null;
+
+      if (sysDisk && typeof sysDisk === 'object') {
+        const hasSize = sysDisk.size !== undefined && sysDisk.size !== null && !isNaN(Number(sysDisk.size));
+        const hasUsed = sysDisk.used !== undefined && sysDisk.used !== null && !isNaN(Number(sysDisk.used));
+
+        if (hasSize) {
+          storageBytesTotal = Number(sysDisk.size);
+        }
+        if (hasUsed) {
+          storageBytesUsed = Number(sysDisk.used);
+        }
+
+        if (hasSize && hasUsed && storageBytesTotal! > 0) {
+          storagePct = Math.round(((storageBytesUsed! / storageBytesTotal!) * 100) * 10) / 10;
+        } else if (sysDisk.usedPercent !== undefined && sysDisk.usedPercent !== null && !isNaN(Number(sysDisk.usedPercent))) {
+          storagePct = Math.round(Number(sysDisk.usedPercent) * 10) / 10;
+        }
       }
 
       // Network parsing
@@ -419,9 +421,9 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
         memory: Math.round(memPct * 10) / 10,
         memoryBytesUsed: memUsed,
         memoryBytesTotal: memTotal,
-        storage: Math.round(diskPct * 10) / 10,
-        storageBytesUsed: diskUsed,
-        storageBytesTotal: diskTotal,
+        storage: storagePct,
+        storageBytesUsed: storageBytesUsed,
+        storageBytesTotal: storageBytesTotal,
         networkRxKbps: net.rxKbps,
         networkTxKbps: net.txKbps,
         uptimeSeconds: null, // CasaOS REST API does not provide numeric uptime; do not fabricate
@@ -456,9 +458,9 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
         utilizationPct: metrics.memory
       },
       storage: {
-        usedBytes: metrics.storageBytesUsed || 0,
-        totalBytes: metrics.storageBytesTotal || 0,
-        utilizationPct: metrics.storage
+        usedBytes: metrics.storageBytesUsed ?? null,
+        totalBytes: metrics.storageBytesTotal ?? null,
+        utilizationPct: metrics.storage ?? null
       },
       network: {
         rxBytesPerSec: null,

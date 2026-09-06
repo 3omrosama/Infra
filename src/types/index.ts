@@ -231,7 +231,7 @@ export interface MetricDataPoint {
   memory: number;
   memoryBytesUsed?: number | null;
   memoryBytesTotal?: number | null;
-  storage: number;
+  storage: number | null;
   storageBytesUsed?: number | null;
   storageBytesTotal?: number | null;
   networkRxKbps: number | null;
@@ -255,9 +255,9 @@ export interface NormalizedTelemetry {
     utilizationPct: number;
   };
   storage: {
-    usedBytes: number;
-    totalBytes: number;
-    utilizationPct: number;
+    usedBytes: number | null;
+    totalBytes: number | null;
+    utilizationPct: number | null;
   };
   network: {
     rxBytesPerSec: number | null;

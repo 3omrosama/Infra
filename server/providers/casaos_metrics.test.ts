@@ -31,7 +31,42 @@ const mockLoginSuccess = {
   }
 };
 
-const mockUtilization = {
+const mockUtilizationWithDisk = {
+  success: 200,
+  message: 'ok',
+  data: {
+    cpu: {
+      percent: 18.5,
+      num: 4,
+      temperature: 41,
+      model: 'Intel Celeron N5105'
+    },
+    mem: {
+      total: 8589934592,
+      used: 3435973836,
+      free: 5153960756,
+      usedPercent: 40.0
+    },
+    sys_disk: {
+      size: 512000000000,
+      used: 128000000000,
+      avail: 384000000000,
+      health: true
+    },
+    net: [
+      {
+        name: 'eth0',
+        bytesRecv: 10240, // 10 KB
+        bytesSent: 20480, // 20 KB
+        packetsRecv: 100,
+        packetsSent: 150,
+        state: 'up'
+      }
+    ]
+  }
+};
+
+const mockUtilizationWithoutDisk = {
   success: 200,
   message: 'ok',
   data: {
@@ -50,25 +85,13 @@ const mockUtilization = {
     net: [
       {
         name: 'eth0',
-        bytesRecv: 10240, // 10 KB
-        bytesSent: 20480, // 20 KB
+        bytesRecv: 10240,
+        bytesSent: 20480,
         packetsRecv: 100,
         packetsSent: 150,
         state: 'up'
       }
     ]
-  }
-};
-
-const mockDisk = {
-  success: 200,
-  message: 'ok',
-  data: {
-    path: '/',
-    total: 512000000000,
-    used: 128000000000,
-    free: 384000000000,
-    usedPercent: 25.0
   }
 };
 
@@ -129,10 +152,10 @@ describe('CasaOS Native REST API Provider', () => {
         // Verify Authorization header sends raw access_token (not Bearer)
         const auth = (options.headers as any)?.Authorization;
         assert.strictEqual(auth, 'jwt-mock-token-abc-123');
-        return new Response(JSON.stringify(mockUtilization), { status: 200 });
+        return new Response(JSON.stringify(mockUtilizationWithDisk), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) {
-        return new Response(JSON.stringify(mockDisk), { status: 200 });
+      if (url.includes('/v1/sys/disk')) {
+        throw new Error('/v1/sys/disk should not be requested');
       }
       return new Response('Not found', { status: 404 });
     };
@@ -142,11 +165,15 @@ describe('CasaOS Native REST API Provider', () => {
     assert.strictEqual(metrics.cpu, 18.5);
     assert.strictEqual(metrics.memory, 40.0);
     assert.strictEqual(metrics.storage, 25.0);
+    assert.strictEqual(metrics.storageBytesTotal, 512000000000);
+    assert.strictEqual(metrics.storageBytesUsed, 128000000000);
 
     const telemetry = await provider.getNormalizedTelemetry();
     assert.strictEqual(telemetry.cpu.utilizationPct, 18.5);
     assert.strictEqual(telemetry.memory.utilizationPct, 40.0);
     assert.strictEqual(telemetry.storage.utilizationPct, 25.0);
+    assert.strictEqual(telemetry.storage.totalBytes, 512000000000);
+    assert.strictEqual(telemetry.storage.usedBytes, 128000000000);
     assert.strictEqual(telemetry.status, 'ONLINE');
   });
 
@@ -164,7 +191,6 @@ describe('CasaOS Native REST API Provider', () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -187,7 +213,6 @@ describe('CasaOS Native REST API Provider', () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -197,17 +222,25 @@ describe('CasaOS Native REST API Provider', () => {
     assert.strictEqual(metrics.memoryBytesUsed, 8000000000);
   });
 
-  // 6. Disk parsing
-  it('6. Correctly parses Disk used, total, and utilization percentage', async () => {
+  // 6. Disk parsing from sys_disk
+  it('6. Correctly parses sys_disk size, used, and computes storage percentage', async () => {
     const provider = createMockProvider();
 
     provider['fetchWithTimeout'] = async (url: string) => {
       if (url.endsWith('/v1/users/login')) return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
-      if (url.endsWith('/v1/sys/utilization')) return new Response(JSON.stringify(mockUtilization), { status: 200 });
-      if (url.endsWith('/v1/sys/disk')) {
+      if (url.endsWith('/v1/sys/utilization')) {
         return new Response(JSON.stringify({
           success: 200,
-          data: { total: 1000000000000, used: 750000000000, usedPercent: 75.0 }
+          data: {
+            cpu: { percent: 10, num: 2 },
+            mem: { total: 1000, used: 200, usedPercent: 20 },
+            sys_disk: {
+              size: 1000000000000,
+              used: 750000000000,
+              avail: 250000000000,
+              health: true
+            }
+          }
         }), { status: 200 });
       }
       return new Response('Not found', { status: 404 });
@@ -217,6 +250,61 @@ describe('CasaOS Native REST API Provider', () => {
     assert.strictEqual(metrics.storage, 75.0);
     assert.strictEqual(metrics.storageBytesTotal, 1000000000000);
     assert.strictEqual(metrics.storageBytesUsed, 750000000000);
+
+    const telemetry = await provider.getNormalizedTelemetry();
+    assert.strictEqual(telemetry.storage.utilizationPct, 75.0);
+    assert.strictEqual(telemetry.storage.totalBytes, 1000000000000);
+    assert.strictEqual(telemetry.storage.usedBytes, 750000000000);
+  });
+
+  // 6b. sys_disk missing
+  it('6b. sys_disk missing leaves storage metrics strictly null (never converted to zero)', async () => {
+    const provider = createMockProvider();
+
+    provider['fetchWithTimeout'] = async (url: string) => {
+      if (url.endsWith('/v1/users/login')) return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
+      if (url.endsWith('/v1/sys/utilization')) {
+        return new Response(JSON.stringify(mockUtilizationWithoutDisk), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    const metrics = await provider.getMetrics();
+    assert.strictEqual(metrics.storage, null);
+    assert.strictEqual(metrics.storageBytesTotal, null);
+    assert.strictEqual(metrics.storageBytesUsed, null);
+
+    const telemetry = await provider.getNormalizedTelemetry();
+    assert.strictEqual(telemetry.storage.utilizationPct, null);
+    assert.strictEqual(telemetry.storage.totalBytes, null);
+    assert.strictEqual(telemetry.storage.usedBytes, null);
+  });
+
+  // 6c. /v1/sys/disk is never requested
+  it('6c. /v1/sys/disk is never requested during testConnection or getMetrics', async () => {
+    const provider = createMockProvider();
+    const requestedUrls: string[] = [];
+
+    provider['fetchWithTimeout'] = async (url: string) => {
+      requestedUrls.push(url);
+      if (url.endsWith('/v1/users/login')) return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
+      if (url.endsWith('/ping')) return new Response('pong', { status: 200 });
+      if (url.endsWith('/v1/sys/utilization')) return new Response(JSON.stringify(mockUtilizationWithDisk), { status: 200 });
+      if (url.endsWith('/v1/sys/version')) return new Response(JSON.stringify({ success: 200, data: { current_version: '0.4.4' } }), { status: 200 });
+      if (url.includes('/v1/sys/disk')) {
+        return new Response('Not Found', { status: 404 });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    const testRes = await provider.testConnection();
+    assert.strictEqual(testRes.success, true);
+
+    const metrics = await provider.getMetrics();
+    assert.strictEqual(metrics.storage, 25.0);
+
+    const diskRequested = requestedUrls.some(u => u.includes('/v1/sys/disk'));
+    assert.strictEqual(diskRequested, false, '/v1/sys/disk must never be called');
   });
 
   // 7. Network RX/TX parsing
@@ -236,7 +324,6 @@ describe('CasaOS Native REST API Provider', () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -262,7 +349,6 @@ describe('CasaOS Native REST API Provider', () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -287,7 +373,6 @@ describe('CasaOS Native REST API Provider', () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -323,9 +408,8 @@ describe('CasaOS Native REST API Provider', () => {
           return new Response(JSON.stringify({ success: 401, message: 'token expired' }), { status: 401 });
         }
         // Succeed on retry
-        return new Response(JSON.stringify(mockUtilization), { status: 200 });
+        return new Response(JSON.stringify(mockUtilizationWithDisk), { status: 200 });
       }
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 
@@ -375,7 +459,7 @@ describe('CasaOS Native REST API Provider', () => {
       if (url.endsWith('/ping')) {
         return new Response('Internal Server Error', { status: 500, statusText: 'Internal Server Error' });
       }
-      return new Response(JSON.stringify(mockUtilization), { status: 200 });
+      return new Response(JSON.stringify(mockUtilizationWithDisk), { status: 200 });
     };
 
     const testRes = await provider.testConnection();
@@ -390,8 +474,7 @@ describe('CasaOS Native REST API Provider', () => {
 
     provider['fetchWithTimeout'] = async (url: string) => {
       if (url.endsWith('/v1/users/login')) return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
-      if (url.endsWith('/v1/sys/utilization')) return new Response(JSON.stringify(mockUtilization), { status: 200 });
-      if (url.endsWith('/v1/sys/disk')) return new Response(JSON.stringify(mockDisk), { status: 200 });
+      if (url.endsWith('/v1/sys/utilization')) return new Response(JSON.stringify(mockUtilizationWithDisk), { status: 200 });
       return new Response('Not found', { status: 404 });
     };
 

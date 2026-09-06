@@ -19,6 +19,7 @@ import {
 import { InfrastructureType, ProviderConnectionConfig, InfrastructureConnection } from '../../types/index';
 import { api } from '../../lib/api';
 import { useNotifications } from '../../context/NotificationContext';
+import { useModalAnimation } from '../../hooks/useModalAnimation';
 
 interface AddConnectionModalProps {
   isOpen: boolean;
@@ -54,6 +55,18 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
   const [duplicateError, setDuplicateError] = useState<{ message: string; existingName?: string } | null>(null);
 
   const isEditMode = Boolean(connectionToEdit);
+
+  const {
+    isMounted,
+    isVisible,
+    handleClose,
+    handleBackdropClick,
+    getCardClass
+  } = useModalAnimation(isOpen, {
+    onClose,
+    exitDurationMs: 200,
+    disableEscape: isSubmitting
+  });
 
   useEffect(() => {
     if (connectionToEdit) {
@@ -211,11 +224,27 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
     }
   };
 
+  if (!isMounted) return null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+    <div 
+      onClick={e => {
+        if (!isSubmitting) {
+          handleBackdropClick(e);
+        }
+      }}
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+        isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-connection-title"
+      aria-busy={isSubmitting}
+    >
       <div 
         id="add-connection-modal"
-        className="w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+        className={getCardClass("w-full max-w-xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]")}
+        onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
@@ -224,7 +253,7 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               <Server className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white tracking-tight">
+              <h3 id="add-connection-title" className="text-base font-bold text-white tracking-tight">
                 {isEditMode ? `Edit Infrastructure Node (${name || connectionToEdit?.name})` : 'Connect Infrastructure Node'}
               </h3>
               <p className="text-xs text-slate-400">
@@ -234,8 +263,9 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
           </div>
           <button 
             id="btn-close-add-connection"
-            onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+            onClick={handleClose}
+            disabled={isSubmitting}
+            className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
           </button>
@@ -551,8 +581,9 @@ export const AddConnectionModal: React.FC<AddConnectionModalProps> = ({
               <button
                 type="button"
                 id="btn-cancel-add-conn"
-                onClick={onClose}
-                className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
+                onClick={handleClose}
+                disabled={isSubmitting}
+                className="px-4 py-2 text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>

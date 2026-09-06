@@ -8,10 +8,11 @@ import {
   AlertOctagon, 
   ScrollText, 
   Settings, 
-  X,
-  Layers
+  X, 
+  Layers 
 } from 'lucide-react';
 import { NavItemKey } from './Sidebar';
+import { useModalAnimation } from '../../hooks/useModalAnimation';
 
 interface CommandMenuProps {
   isOpen: boolean;
@@ -26,21 +27,29 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
 }) => {
   const [query, setQuery] = useState('');
 
+  const {
+    isMounted,
+    isVisible,
+    handleClose,
+    handleBackdropClick,
+    getCardClass
+  } = useModalAnimation(isOpen, {
+    onClose,
+    exitDurationMs: 200
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        isOpen ? onClose() : undefined;
-      }
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
+        isOpen ? handleClose() : undefined;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, handleClose]);
 
-  if (!isOpen) return null;
+  if (!isMounted) return null;
 
   const quickActions: { label: string; tab: NavItemKey; category: string; icon: any }[] = [
     { label: 'View Main Operations Dashboard', tab: 'dashboard', category: 'Navigation', icon: Layers },
@@ -63,10 +72,19 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+    <div 
+      onClick={handleBackdropClick}
+      className={`fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-black/75 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+        isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Global Command Palette"
+    >
       <div 
         id="global-command-palette-modal"
-        className="w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden"
+        className={getCardClass("w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden")}
+        onClick={e => e.stopPropagation()}
       >
         {/* Search Input */}
         <div className="p-4 border-b border-slate-800 flex items-center gap-3 bg-slate-950/60">
@@ -82,7 +100,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
           />
           <button 
             id="btn-close-command-palette"
-            onClick={onClose}
+            onClick={handleClose}
             className="text-slate-400 hover:text-white p-1 rounded-lg"
           >
             <X className="w-5 h-5" />
@@ -104,7 +122,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                   id={`command-action-${action.tab}`}
                   onClick={() => {
                     onNavigate(action.tab);
-                    onClose();
+                    handleClose();
                   }}
                   className="w-full flex items-center justify-between p-3 rounded-xl text-left hover:bg-slate-800/70 text-slate-200 hover:text-white transition-colors group"
                 >

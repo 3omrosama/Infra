@@ -17,6 +17,7 @@ import {
 import { VirtualMachine } from '../../types/index';
 import { formatBytes, formatUptime } from '../../lib/utils';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { useModalAnimation } from '../../hooks/useModalAnimation';
 
 interface VMDetailModalProps {
   vm: VirtualMachine | null;
@@ -33,56 +34,81 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'metrics' | 'disks' | 'network'>('overview');
 
-  if (!vm) return null;
+  const {
+    isMounted,
+    isVisible,
+    activeData,
+    handleClose,
+    handleBackdropClick,
+    getCardClass
+  } = useModalAnimation<VirtualMachine>(Boolean(vm), {
+    onClose,
+    data: vm || undefined,
+    exitDurationMs: 200
+  });
+
+  if (!isMounted) return null;
+
+  const currentVm = (vm || activeData) as VirtualMachine;
+  if (!currentVm) return null;
 
   // Generate realistic sparkline timeline for VM inspector
   const mockSparklines = [
-    { time: '10m', cpu: Math.max(10, vm.cpuUsagePct - 8), memory: vm.memoryUsagePct - 2 },
-    { time: '8m', cpu: Math.max(15, vm.cpuUsagePct + 4), memory: vm.memoryUsagePct + 1 },
-    { time: '6m', cpu: Math.max(12, vm.cpuUsagePct - 3), memory: vm.memoryUsagePct },
-    { time: '4m', cpu: Math.max(20, vm.cpuUsagePct + 7), memory: vm.memoryUsagePct + 3 },
-    { time: '2m', cpu: Math.max(14, vm.cpuUsagePct - 1), memory: vm.memoryUsagePct + 2 },
-    { time: 'Now', cpu: vm.cpuUsagePct, memory: vm.memoryUsagePct }
+    { time: '10m', cpu: Math.max(10, currentVm.cpuUsagePct - 8), memory: currentVm.memoryUsagePct - 2 },
+    { time: '8m', cpu: Math.max(15, currentVm.cpuUsagePct + 4), memory: currentVm.memoryUsagePct + 1 },
+    { time: '6m', cpu: Math.max(12, currentVm.cpuUsagePct - 3), memory: currentVm.memoryUsagePct },
+    { time: '4m', cpu: Math.max(20, currentVm.cpuUsagePct + 7), memory: currentVm.memoryUsagePct + 3 },
+    { time: '2m', cpu: Math.max(14, currentVm.cpuUsagePct - 1), memory: currentVm.memoryUsagePct + 2 },
+    { time: 'Now', cpu: currentVm.cpuUsagePct, memory: currentVm.memoryUsagePct }
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+    <div 
+      onClick={handleBackdropClick}
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+        isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+      }`}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="vm-detail-title"
+    >
       <div 
         id="vm-detail-modal"
-        className="w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        className={getCardClass("w-full max-w-3xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]")}
+        onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
           <div className="flex items-center gap-3">
             <div className={`p-2.5 rounded-xl border ${
-              vm.powerState === 'RUNNING' 
+              currentVm.powerState === 'RUNNING' 
                 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                : (vm.powerState === 'SUSPENDED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-800 text-slate-400 border-slate-700')
+                : (currentVm.powerState === 'SUSPENDED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-slate-800 text-slate-400 border-slate-700')
             }`}>
               <Cpu className="w-6 h-6" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white tracking-tight">{vm.name}</h3>
+                <h3 id="vm-detail-title" className="text-base font-bold text-white tracking-tight">{currentVm.name}</h3>
                 <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md font-mono ${
-                  vm.powerState === 'RUNNING'
+                  currentVm.powerState === 'RUNNING'
                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                    : (vm.powerState === 'SUSPENDED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30')
+                    : (currentVm.powerState === 'SUSPENDED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30')
                 }`}>
-                  {vm.powerState}
+                  {currentVm.powerState}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">{vm.guestOs} • ID: {vm.externalVmId}</p>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">{currentVm.guestOs} • ID: {currentVm.externalVmId}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             {canManage && (
               <div className="flex items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                {vm.powerState === 'STOPPED' ? (
+                {currentVm.powerState === 'STOPPED' ? (
                   <button
                     id="btn-vm-modal-power-on"
-                    onClick={() => onPowerAction(vm, 'power-on')}
+                    onClick={() => onPowerAction(currentVm, 'power-on')}
                     className="flex items-center gap-1 px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
                   >
                     <Power className="w-3.5 h-3.5" />
@@ -92,7 +118,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                   <>
                     <button
                       id="btn-vm-modal-restart"
-                      onClick={() => onPowerAction(vm, 'restart')}
+                      onClick={() => onPowerAction(currentVm, 'restart')}
                       className="p-1.5 text-amber-400 hover:bg-amber-500/10 rounded-lg"
                       title="Restart Guest OS"
                     >
@@ -100,7 +126,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                     </button>
                     <button
                       id="btn-vm-modal-suspend"
-                      onClick={() => onPowerAction(vm, 'suspend')}
+                      onClick={() => onPowerAction(currentVm, 'suspend')}
                       className="p-1.5 text-amber-400 hover:bg-amber-500/10 rounded-lg"
                       title="Suspend VM"
                     >
@@ -108,7 +134,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                     </button>
                     <button
                       id="btn-vm-modal-power-off"
-                      onClick={() => onPowerAction(vm, 'power-off')}
+                      onClick={() => onPowerAction(currentVm, 'power-off')}
                       className="p-1.5 text-rose-400 hover:bg-rose-500/10 rounded-lg"
                       title="Power Off VM"
                     >
@@ -120,7 +146,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
             )}
             <button 
               id="btn-close-vm-modal"
-              onClick={onClose}
+              onClick={handleClose}
               className="text-slate-400 hover:text-white p-1 rounded-lg"
             >
               <X className="w-5 h-5" />
@@ -158,22 +184,22 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase">vCPU Cores</p>
-                  <p className="text-xl font-bold text-white mt-1">{vm.cpuCores} vCPUs</p>
-                  <p className="text-xs text-cyan-400 font-mono mt-0.5">{vm.cpuUsagePct.toFixed(1)}% active</p>
+                  <p className="text-xl font-bold text-white mt-1">{currentVm.cpuCount} vCPUs</p>
+                  <p className="text-xs text-cyan-400 font-mono mt-0.5">{currentVm.cpuUsagePct.toFixed(1)}% active</p>
                 </div>
                 <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase">Allocated Memory</p>
-                  <p className="text-xl font-bold text-white mt-1">{formatBytes(vm.memoryBytes)}</p>
-                  <p className="text-xs text-cyan-400 font-mono mt-0.5">{vm.memoryUsagePct.toFixed(1)}% active</p>
+                  <p className="text-xl font-bold text-white mt-1">{formatBytes(currentVm.memoryBytes)}</p>
+                  <p className="text-xs text-cyan-400 font-mono mt-0.5">{currentVm.memoryUsagePct.toFixed(1)}% active</p>
                 </div>
                 <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase">Virtual Disk</p>
-                  <p className="text-xl font-bold text-white mt-1">{formatBytes(vm.diskProvisionedBytes)}</p>
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">{formatBytes(vm.diskUsedBytes)} used</p>
+                  <p className="text-xl font-bold text-white mt-1">{formatBytes(currentVm.storageBytes)}</p>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">{currentVm.storageUsagePct.toFixed(1)}% used</p>
                 </div>
                 <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase">Uptime</p>
-                  <p className="text-xl font-bold text-white mt-1">{formatUptime(vm.uptimeSeconds)}</p>
+                  <p className="text-xl font-bold text-white mt-1">{formatUptime(currentVm.uptimeSeconds)}</p>
                   <p className="text-xs text-emerald-400 font-mono mt-0.5">Continuous</p>
                 </div>
               </div>
@@ -187,7 +213,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                 <div className="grid grid-cols-2 gap-4 text-xs">
                   <div>
                     <span className="text-slate-500">IP Address:</span>
-                    <span className="ml-2 font-mono text-slate-200">{vm.ipAddress || 'N/A'}</span>
+                    <span className="ml-2 font-mono text-slate-200">{currentVm.ipAddress || 'N/A'}</span>
                   </div>
                   <div>
                     <span className="text-slate-500">VMware Tools:</span>
@@ -198,8 +224,8 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                     <span className="ml-2 font-mono text-slate-200">vSphere Virtual Hardware</span>
                   </div>
                   <div>
-                    <span className="text-slate-500">Host Server:</span>
-                    <span className="ml-2 font-mono text-slate-200">{vm.hostName || 'Hypervisor Host'}</span>
+                    <span className="text-slate-500">Host Identifier:</span>
+                    <span className="ml-2 font-mono text-slate-200">{currentVm.hostId || 'Hypervisor Host'}</span>
                   </div>
                 </div>
               </div>
@@ -240,11 +266,11 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                   <HardDrive className="w-5 h-5 text-cyan-400" />
                   <div>
                     <h4 className="text-xs font-bold text-white">Hard Disk 1 (SCSI 0:0)</h4>
-                    <p className="text-[11px] text-slate-400 font-mono">datastore-nvme-01/[{vm.name}]/{vm.name}.vmdk</p>
+                    <p className="text-[11px] text-slate-400 font-mono">{currentVm.datastoreName || 'datastore-nvme-01'}/[{currentVm.name}]/{currentVm.name}.vmdk</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs font-bold text-white">{formatBytes(vm.diskProvisionedBytes)} Provisioned</p>
+                  <p className="text-xs font-bold text-white">{formatBytes(currentVm.storageBytes)} Provisioned</p>
                   <p className="text-[11px] text-emerald-400 font-mono">Thin Provisioned</p>
                 </div>
               </div>
@@ -258,11 +284,11 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
                   <Network className="w-5 h-5 text-cyan-400" />
                   <div>
                     <h4 className="text-xs font-bold text-white">Network Adapter 1 (VMXNET3)</h4>
-                    <p className="text-[11px] text-slate-400 font-mono">Connected to: VM Network (VLAN 100)</p>
+                    <p className="text-[11px] text-slate-400 font-mono">Connected to: {currentVm.networkName || 'VM Network (VLAN 100)'}</p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-xs font-mono text-slate-200">{vm.ipAddress || 'IP Not Assigned / Unreported'}</p>
+                  <p className="text-xs font-mono text-slate-200">{currentVm.ipAddress || 'IP Not Assigned / Unreported'}</p>
                   <p className="text-[11px] text-slate-400 font-mono">vSphere PortGroup</p>
                 </div>
               </div>
@@ -274,7 +300,7 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
         <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
           <span className="text-[11px] text-slate-500 font-mono">Last Synchronized: {new Date().toLocaleTimeString()}</span>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold transition-colors"
           >
             Close Inspector
@@ -284,3 +310,4 @@ export const VMDetailModal: React.FC<VMDetailModalProps> = ({
     </div>
   );
 };
+

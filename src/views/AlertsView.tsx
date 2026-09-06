@@ -16,6 +16,7 @@ import { Alert, AlertRule, AlertSeverity } from '../types/index';
 import { formatRelativeTime } from '../lib/utils';
 import { api } from '../lib/api';
 import { useNotifications } from '../context/NotificationContext';
+import { Modal } from '../components/layout/Modal';
 
 interface AlertsViewProps {
   alerts: Alert[];
@@ -345,88 +346,93 @@ export const AlertsView: React.FC<AlertsViewProps> = ({
       )}
 
       {/* Add Alert Rule Modal */}
-      {showAddRuleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-bold text-white">Create Alert Rule</h3>
-              <button onClick={() => setShowAddRuleModal(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+      <Modal
+        isOpen={showAddRuleModal}
+        onClose={() => setShowAddRuleModal(false)}
+        ariaLabelledBy="create-alert-rule-title"
+      >
+        <div 
+          id="add-alert-rule-modal"
+          className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl space-y-4"
+        >
+          <div className="flex items-center justify-between">
+            <h3 id="create-alert-rule-title" className="text-base font-bold text-white">Create Alert Rule</h3>
+            <button onClick={() => setShowAddRuleModal(false)} className="text-slate-400 hover:text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleCreateRule} className="space-y-4 text-xs">
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Rule Name</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Critical High RAM Warning"
+                value={ruleName}
+                onChange={e => setRuleName(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500"
+              />
             </div>
 
-            <form onSubmit={handleCreateRule} className="space-y-4 text-xs">
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">Rule Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Critical High RAM Warning"
-                  value={ruleName}
-                  onChange={e => setRuleName(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Metric</label>
-                  <select
-                    value={ruleMetric}
-                    onChange={e => setRuleMetric(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500"
-                  >
-                    <option value="cpu">CPU Utilization</option>
-                    <option value="memory">Memory Allocation</option>
-                    <option value="storage">Storage Datastore</option>
-                    <option value="status">Node Reachability</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">Threshold (%)</label>
-                  <input
-                    type="number"
-                    required
-                    value={ruleThreshold}
-                    onChange={e => setRuleThreshold(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Severity</label>
+                <label className="block text-slate-300 font-semibold mb-1">Metric</label>
                 <select
-                  value={ruleSeverity}
-                  onChange={e => setRuleSeverity(e.target.value as AlertSeverity)}
+                  value={ruleMetric}
+                  onChange={e => setRuleMetric(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500"
                 >
-                  <option value="CRITICAL">CRITICAL</option>
-                  <option value="WARNING">WARNING</option>
-                  <option value="INFO">INFO</option>
+                  <option value="cpu">CPU Utilization</option>
+                  <option value="memory">Memory Allocation</option>
+                  <option value="storage">Storage Datastore</option>
+                  <option value="status">Node Reachability</option>
                 </select>
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddRuleModal(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold rounded-xl"
-                >
-                  Save Rule
-                </button>
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Threshold (%)</label>
+                <input
+                  type="number"
+                  required
+                  value={ruleThreshold}
+                  onChange={e => setRuleThreshold(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500 font-mono"
+                />
               </div>
-            </form>
-          </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-300 font-semibold mb-1">Severity</label>
+              <select
+                value={ruleSeverity}
+                onChange={e => setRuleSeverity(e.target.value as AlertSeverity)}
+                className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white focus:border-cyan-500"
+              >
+                <option value="CRITICAL">CRITICAL</option>
+                <option value="WARNING">WARNING</option>
+                <option value="INFO">INFO</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAddRuleModal(false)}
+                className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold rounded-xl"
+              >
+                Save Rule
+              </button>
+            </div>
+          </form>
         </div>
-      )}
+      </Modal>
     </div>
   );
 };

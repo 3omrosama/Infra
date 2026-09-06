@@ -1055,6 +1055,123 @@ export class DataStore {
     return serverObj;
   }
 
+  public async syncDiscoveredCasaOSApps(connectionId: string, apps: CasaOSApp[]): Promise<void> {
+    const discoveredAppIds = new Set<string>();
+    let runningCount = 0;
+
+    for (const app of apps) {
+      app.connectionId = connectionId;
+      discoveredAppIds.add(app.id);
+      if (app.status === 'running') {
+        runningCount++;
+      }
+
+      // Preserve existing telemetry metrics if previously recorded and not provided in current sync
+      const existing = this.casaosApps.get(app.id);
+      if (existing) {
+        app.cpuUsagePct = (app.cpuUsagePct !== undefined && app.cpuUsagePct !== null) ? app.cpuUsagePct : existing.cpuUsagePct;
+        app.memoryBytes = (app.memoryBytes !== undefined && app.memoryBytes !== null) ? app.memoryBytes : existing.memoryBytes;
+        app.memoryUsagePct = (app.memoryUsagePct !== undefined && app.memoryUsagePct !== null) ? app.memoryUsagePct : existing.memoryUsagePct;
+        app.networkRxBytes = (app.networkRxBytes !== undefined && app.networkRxBytes !== null) ? app.networkRxBytes : existing.networkRxBytes;
+        app.networkTxBytes = (app.networkTxBytes !== undefined && app.networkTxBytes !== null) ? app.networkTxBytes : existing.networkTxBytes;
+        app.uptimeSeconds = (app.uptimeSeconds !== undefined && app.uptimeSeconds !== null) ? app.uptimeSeconds : existing.uptimeSeconds;
+        app.restartCount = (app.restartCount !== undefined && app.restartCount !== null) ? app.restartCount : existing.restartCount;
+        app.createdAt = existing.createdAt || app.createdAt;
+      }
+
+      // In-memory update
+      this.casaosApps.set(app.id, app);
+
+      // Prisma persistence
+      if (this.isDbConnected) {
+        try {
+          await prisma.container.upsert({
+            where: { id: app.id },
+            update: {
+              externalId: app.containerId || app.id,
+              name: app.name,
+              image: app.image,
+              status: app.status,
+              powerState: app.status === 'running' ? 'RUNNING' : 'STOPPED',
+              cpuUsagePct: app.cpuUsagePct !== null && app.cpuUsagePct !== undefined ? app.cpuUsagePct : 0,
+              memoryBytes: BigInt(Math.floor(app.memoryBytes !== null && app.memoryBytes !== undefined ? app.memoryBytes : 0)),
+              memoryUsagePct: app.memoryUsagePct !== null && app.memoryUsagePct !== undefined ? app.memoryUsagePct : 0,
+              networkRxBytes: BigInt(Math.floor(app.networkRxBytes !== null && app.networkRxBytes !== undefined ? app.networkRxBytes : 0)),
+              networkTxBytes: BigInt(Math.floor(app.networkTxBytes !== null && app.networkTxBytes !== undefined ? app.networkTxBytes : 0)),
+              restartCount: app.restartCount !== null && app.restartCount !== undefined ? app.restartCount : 0,
+              ports: (app.ports as any) || [],
+              volumes: (app.volumes as any) || [],
+              uptimeSeconds: BigInt(Math.floor(app.uptimeSeconds !== null && app.uptimeSeconds !== undefined ? app.uptimeSeconds : 0)),
+              isCasaOsApp: true,
+              appTitle: app.title,
+              appIcon: app.icon,
+              appCategory: app.category
+            },
+            create: {
+              id: app.id,
+              connectionId,
+              externalId: app.containerId || app.id,
+              name: app.name,
+              image: app.image,
+              status: app.status,
+              powerState: app.status === 'running' ? 'RUNNING' : 'STOPPED',
+              cpuUsagePct: app.cpuUsagePct !== null && app.cpuUsagePct !== undefined ? app.cpuUsagePct : 0,
+              memoryBytes: BigInt(Math.floor(app.memoryBytes !== null && app.memoryBytes !== undefined ? app.memoryBytes : 0)),
+              memoryUsagePct: app.memoryUsagePct !== null && app.memoryUsagePct !== undefined ? app.memoryUsagePct : 0,
+              networkRxBytes: BigInt(Math.floor(app.networkRxBytes !== null && app.networkRxBytes !== undefined ? app.networkRxBytes : 0)),
+              networkTxBytes: BigInt(Math.floor(app.networkTxBytes !== null && app.networkTxBytes !== undefined ? app.networkTxBytes : 0)),
+              restartCount: app.restartCount !== null && app.restartCount !== undefined ? app.restartCount : 0,
+              ports: (app.ports as any) || [],
+              volumes: (app.volumes as any) || [],
+              uptimeSeconds: BigInt(Math.floor(app.uptimeSeconds !== null && app.uptimeSeconds !== undefined ? app.uptimeSeconds : 0)),
+              isCasaOsApp: true,
+              appTitle: app.title,
+              appIcon: app.icon,
+              appCategory: app.category,
+              createdAt: new Date(app.createdAt || Date.now())
+            }
+          });
+        } catch (err: any) {
+          console.error(`[DataStore] Failed to persist CasaOS app '${app.title}':`, err?.message || err);
+        }
+      }
+    }
+
+    // Prune stale CasaOS apps ONLY belonging to this connection and marked as CasaOS apps
+    for (const [id, a] of this.casaosApps.entries()) {
+      if (a.connectionId === connectionId && !discoveredAppIds.has(id)) {
+        this.casaosApps.delete(id);
+        if (this.isDbConnected) {
+          await prisma.container.deleteMany({
+            where: {
+              id,
+              connectionId,
+              isCasaOsApp: true
+            }
+          }).catch(() => {});
+        }
+      }
+    }
+
+    // Update corresponding CasaOSServer node's totalAppsCount and runningAppsCount
+    const serverObj = Array.from(this.casaosServers.values()).find(s => s.connectionId === connectionId);
+    if (serverObj) {
+      serverObj.totalAppsCount = apps.length;
+      serverObj.runningAppsCount = runningCount;
+      this.casaosServers.set(serverObj.id, serverObj);
+
+      if (this.isDbConnected) {
+        await prisma.casaOSServer.updateMany({
+          where: { connectionId },
+          data: {
+            totalAppsCount: apps.length,
+            runningAppsCount: runningCount
+          }
+        }).catch(() => {});
+      }
+    }
+  }
+
   public async saveAlert(alert: Alert): Promise<void> {
     this.alerts.set(alert.id, alert);
     if (!this.isDbConnected) return;

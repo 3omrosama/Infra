@@ -4,7 +4,8 @@ import {
   ProviderTestResult, 
   MetricDataPoint, 
   SystemEvent,
-  NormalizedTelemetry
+  NormalizedTelemetry,
+  CasaOSApp
 } from '../../src/types/index.js';
 
 export class CasaOSProvider extends BaseInfrastructureProvider {
@@ -480,5 +481,250 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
 
   public getCachedVersion(): string | null {
     return this.cachedVersion;
+  }
+
+  /**
+   * Discovers installed compose applications from CasaOS /v2/app_management/compose
+   */
+  async getInstalledApps(): Promise<CasaOSApp[]> {
+    const rawRes = await this.requestCasaOS<any>('/v2/app_management/compose');
+    const appsData = rawRes?.data;
+    if (!appsData || typeof appsData !== 'object') {
+      return [];
+    }
+
+    const discoveredApps: CasaOSApp[] = [];
+    const connectionId = this.config.id || 'casaos';
+    const host = (this.config.host || '').trim().replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i, '').replace(/\/+$/, '');
+
+    for (const [appId, item] of Object.entries<any>(appsData)) {
+      if (!item || typeof item !== 'object') continue;
+
+      const storeInfo = item.store_info || {};
+      const compose = item.compose || {};
+      const services = compose.services || {};
+      const serviceEntries = Object.entries<any>(services);
+
+      // Extract title
+      let title = appId;
+      if (typeof storeInfo.title === 'string' && storeInfo.title.trim()) {
+        title = storeInfo.title.trim();
+      } else if (storeInfo.title && typeof storeInfo.title === 'object') {
+        title = storeInfo.title.en_us || Object.values(storeInfo.title)[0] || appId;
+      }
+
+      // Extract description
+      let description = '';
+      if (typeof storeInfo.description === 'string') {
+        description = storeInfo.description;
+      } else if (storeInfo.description && typeof storeInfo.description === 'object') {
+        description = storeInfo.description.en_us || Object.values(storeInfo.description)[0] || '';
+      }
+
+      // Extract icon
+      const icon = (typeof storeInfo.icon === 'string' && storeInfo.icon.trim()) ? storeInfo.icon.trim() : 'server';
+
+      // Extract category
+      const category = (typeof storeInfo.category === 'string' && storeInfo.category.trim()) ? storeInfo.category.trim() : 'General';
+
+      // Status mapping: running | stopped | restarting | error
+      let status: 'running' | 'stopped' | 'restarting' | 'error' = 'stopped';
+      const rawStatus = (item.status || '').toLowerCase().trim();
+      if (rawStatus === 'running' || rawStatus === 'healthy') {
+        status = 'running';
+      } else if (rawStatus === 'restarting') {
+        status = 'restarting';
+      } else if (rawStatus === 'error' || rawStatus === 'unhealthy' || rawStatus === 'dead') {
+        status = 'error';
+      } else {
+        status = 'stopped';
+      }
+
+      // Primary service details
+      let image = 'custom:latest';
+      let containerName = appId;
+      const ports: Array<{ host: number; container: number; protocol: 'tcp' | 'udp' }> = [];
+      const volumes: Array<{ hostPath: string; containerPath: string; mode: string }> = [];
+
+      for (const [svcName, svc] of serviceEntries) {
+        if (!svc || typeof svc !== 'object') continue;
+        if (svc.image && image === 'custom:latest') {
+          image = String(svc.image);
+        }
+        if (svc.container_name && containerName === appId) {
+          containerName = String(svc.container_name);
+        } else if (svcName && containerName === appId) {
+          containerName = svcName;
+        }
+
+        // Parse ports
+        if (Array.isArray(svc.ports)) {
+          for (const p of svc.ports) {
+            if (typeof p === 'object' && p !== null) {
+              const target = Number(p.target || p.container_port || p.containerPort);
+              const published = Number(p.published || p.host_port || p.hostPort);
+              const protocol = (String(p.protocol || 'tcp').toLowerCase() === 'udp') ? 'udp' : 'tcp';
+              if (!isNaN(published) && published > 0) {
+                ports.push({
+                  host: published,
+                  container: !isNaN(target) && target > 0 ? target : published,
+                  protocol
+                });
+              }
+            } else if (typeof p === 'string' || typeof p === 'number') {
+              const portStr = String(p);
+              const parts = portStr.split(':');
+              if (parts.length >= 2) {
+                const hostP = parseInt(parts[0], 10);
+                const containerPart = parts[1].split('/')[0];
+                const contP = parseInt(containerPart, 10);
+                const proto = portStr.includes('/udp') ? 'udp' : 'tcp';
+                if (!isNaN(hostP) && hostP > 0) {
+                  ports.push({
+                    host: hostP,
+                    container: !isNaN(contP) && contP > 0 ? contP : hostP,
+                    protocol: proto
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Parse volumes
+        if (Array.isArray(svc.volumes)) {
+          for (const v of svc.volumes) {
+            if (typeof v === 'object' && v !== null) {
+              const src = v.source || v.src || v.hostPath || '';
+              const tgt = v.target || v.dst || v.containerPath || '';
+              const mode = v.read_only ? 'ro' : (v.mode || 'rw');
+              if (src || tgt) {
+                volumes.push({
+                  hostPath: String(src),
+                  containerPath: String(tgt),
+                  mode: String(mode)
+                });
+              }
+            } else if (typeof v === 'string') {
+              const vParts = v.split(':');
+              if (vParts.length >= 2) {
+                volumes.push({
+                  hostPath: vParts[0],
+                  containerPath: vParts[1],
+                  mode: vParts[2] || 'rw'
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Safe Web URL derivation: scheme + host/IP + published web port + index/path
+      let webUrl: string | undefined = undefined;
+      let primaryPort: number | undefined = undefined;
+      const portMap = storeInfo.port_map || storeInfo.portMap;
+      if (portMap && host) {
+        const parsedPort = parseInt(String(portMap), 10);
+        if (!isNaN(parsedPort) && parsedPort > 0) {
+          primaryPort = parsedPort;
+          const scheme = (typeof storeInfo.scheme === 'string' && storeInfo.scheme.toLowerCase() === 'https') ? 'https' : 'http';
+          let indexPath = '';
+          if (typeof storeInfo.index === 'string' && storeInfo.index.trim()) {
+            const trimmedIndex = storeInfo.index.trim();
+            indexPath = trimmedIndex.startsWith('/') ? trimmedIndex : `/${trimmedIndex}`;
+          }
+          webUrl = `${scheme}://${host}:${parsedPort}${indexPath}`;
+        }
+      } else if (ports.length > 0) {
+        primaryPort = ports[0].host;
+      }
+
+      // Unique synthetic container ID for NOC models
+      const id = `casaos-app-${connectionId}-${appId}`;
+
+      discoveredApps.push({
+        id,
+        connectionId,
+        containerId: appId, // Use compose app ID as container external identifier
+        name: appId,
+        title,
+        icon,
+        iconUrl: icon,
+        description,
+        status,
+        category,
+        image,
+        cpuUsagePct: null,
+        memoryBytes: null,
+        memoryUsagePct: null,
+        networkRxBytes: null,
+        networkTxBytes: null,
+        restartCount: null,
+        ports,
+        volumes,
+        uptimeSeconds: null,
+        createdAt: new Date().toISOString(),
+        ...(primaryPort ? { port: primaryPort } : {}),
+        ...(webUrl ? { webUrl } : {})
+      });
+    }
+
+    return discoveredApps;
+  }
+
+  /**
+   * Execute application lifecycle action (start, stop, restart)
+   * Calls PUT /v2/app_management/compose/{id}/status with raw JSON string body
+   */
+  async executeAppAction(appId: string, action: 'start' | 'stop' | 'restart'): Promise<{ success: boolean; message: string }> {
+    if (!['start', 'stop', 'restart'].includes(action)) {
+      throw new Error(`Invalid CasaOS app action: ${action}. Must be start, stop, or restart`);
+    }
+
+    // Resolve compose app ID from synthetic or raw id
+    let composeId = appId;
+    const prefix = `casaos-app-${this.config.id || 'casaos'}-`;
+    if (composeId.startsWith(prefix)) {
+      composeId = composeId.slice(prefix.length);
+    }
+
+    try {
+      await this.requestCasaOS<any>(`/v2/app_management/compose/${encodeURIComponent(composeId)}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(action)
+      });
+
+      return {
+        success: true,
+        message: `Successfully sent '${action}' signal to application '${composeId}'`
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.message || `Failed to execute '${action}' on application '${composeId}'`
+      };
+    }
+  }
+
+  /**
+   * Read application logs: GET /v2/app_management/compose/{id}/logs?lines=100
+   */
+  async getAppLogs(appId: string, lines = 100): Promise<{ success: boolean; logs: string }> {
+    let composeId = appId;
+    const prefix = `casaos-app-${this.config.id || 'casaos'}-`;
+    if (composeId.startsWith(prefix)) {
+      composeId = composeId.slice(prefix.length);
+    }
+
+    try {
+      const res = await this.requestCasaOS<any>(`/v2/app_management/compose/${encodeURIComponent(composeId)}/logs?lines=${encodeURIComponent(String(lines))}`);
+      const logs = typeof res?.data === 'string' ? res.data : JSON.stringify(res?.data || '');
+      return { success: true, logs };
+    } catch (err: any) {
+      return { success: false, logs: err.message || 'Failed to retrieve application logs' };
+    }
   }
 }

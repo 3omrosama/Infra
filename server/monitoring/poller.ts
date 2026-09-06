@@ -124,7 +124,19 @@ class MonitoringPoller {
             const version = typeof (provider as any).getCachedVersion === 'function' ? (provider as any).getCachedVersion() : null;
             await store.syncDiscoveredCasaOS(conn.id, { version, telemetry });
           } catch (syncErr: any) {
-            console.warn(`[MonitoringPoller] CasaOS sync notice for ${conn.name}:`, syncErr.message);
+            console.warn(`[MonitoringPoller] CasaOS server sync notice for ${conn.name}:`, syncErr.message);
+          }
+
+          // Non-blocking installed applications discovery
+          if (typeof (provider as any).getInstalledApps === 'function') {
+            try {
+              const apps = await (provider as any).getInstalledApps();
+              if (Array.isArray(apps)) {
+                await store.syncDiscoveredCasaOSApps(conn.id, apps);
+              }
+            } catch (appErr: any) {
+              console.warn(`[MonitoringPoller] CasaOS app discovery notice for ${conn.name}:`, appErr.message || 'Discovery request failed');
+            }
           }
         }
 

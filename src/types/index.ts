@@ -172,18 +172,22 @@ export interface CasaOSApp {
   title: string;
   category: string;
   icon?: string;
+  iconUrl?: string;
+  description?: string;
+  port?: number;
+  webUrl?: string;
   status: 'running' | 'stopped' | 'restarting' | 'error';
   containerId: string;
   image: string;
-  cpuUsagePct: number;
-  memoryBytes: number;
-  memoryUsagePct: number;
-  networkRxBytes: number;
-  networkTxBytes: number;
-  restartCount: number;
+  cpuUsagePct?: number | null;
+  memoryBytes?: number | null;
+  memoryUsagePct?: number | null;
+  networkRxBytes?: number | null;
+  networkTxBytes?: number | null;
+  restartCount?: number | null;
   ports: { host: number; container: number; protocol: 'tcp' | 'udp' }[];
   volumes: { hostPath: string; containerPath: string; mode: string }[];
-  uptimeSeconds: number;
+  uptimeSeconds?: number | null;
   createdAt: string;
 }
 

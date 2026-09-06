@@ -1,0 +1,124 @@
+name: inframanager
+
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+    - arm
+  main: inframanager
+  author: 3omrosama
+  category: Utilities
+  description:
+    en_us: "Production-ready full-stack IT Infrastructure Management Dashboard with ESXi, CasaOS, and Docker monitoring, real-time telemetry, alerts, and RBAC."
+  developer: 3omrosama
+  icon: https://raw.githubusercontent.com/3omrosama/inframanger/main/public/casaos-icon.svg
+  tagline:
+    en_us: "Unified IT Infrastructure Monitoring & Management Dashboard"
+  title:
+    en_us: "InfraManager"
+  index: /
+  port_map: "3000"
+  scheme: http
+  version: "1.0.0"
+  website: https://github.com/3omrosama/inframanger
+  repo: https://github.com/3omrosama/inframanger
+  support: https://github.com/3omrosama/inframanger/issues
+  docs: https://github.com/3omrosama/inframanger#readme
+
+services:
+  inframanager:
+    image: ghcr.io/3omrosama/infra:latest
+    container_name: inframanager_app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://noc_user:noc_secure_pass@postgres:5432/noc_infrastructure?schema=public
+      - JWT_SECRET=c8f8b8e0d5a34e7f91a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4
+      - CREDENTIAL_ENCRYPTION_KEY=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      - MONITOR_POLL_INTERVAL_SECONDS=30
+      - METRIC_RETENTION_DAYS=30
+      - DEMO_MODE_DEFAULT=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - inframanager_data:/app/data
+    networks:
+      - inframanager_net
+    x-casaos:
+      envs:
+        - container: PORT
+          description:
+            en_us: "Application HTTP and WebSocket service port"
+        - container: DATABASE_URL
+          description:
+            en_us: "PostgreSQL Database connection string"
+        - container: JWT_SECRET
+          description:
+            en_us: "JWT secret token used for session authentication signing (generate a random 64-character hex string for production)"
+        - container: CREDENTIAL_ENCRYPTION_KEY
+          description:
+            en_us: "32-byte encryption key for encrypting credentials at rest (generate a random 64-character hex string for production)"
+        - container: MONITOR_POLL_INTERVAL_SECONDS
+          description:
+            en_us: "Background telemetry polling interval in seconds"
+        - container: METRIC_RETENTION_DAYS
+          description:
+            en_us: "Metric and telemetry historical retention period in days"
+        - container: DEMO_MODE_DEFAULT
+          description:
+            en_us: "Seed demo servers when database is empty (set to false for production)"
+      ports:
+        - container: "3000"
+          description:
+            en_us: "InfraManager Web Dashboard & API Port"
+      volumes:
+        - container: /app/data
+          description:
+            en_us: "InfraManager application persistent data volume"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: inframanager_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=noc_user
+      - POSTGRES_PASSWORD=noc_secure_pass
+      - POSTGRES_DB=noc_infrastructure
+    volumes:
+      - inframanager_postgres_data:/var/lib/postgresql/data
+    networks:
+      - inframanager_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noc_user -d noc_infrastructure"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    x-casaos:
+      envs:
+        - container: POSTGRES_USER
+          description:
+            en_us: "PostgreSQL database user"
+        - container: POSTGRES_PASSWORD
+          description:
+            en_us: "PostgreSQL database password"
+        - container: POSTGRES_DB
+          description:
+            en_us: "PostgreSQL database name"
+      volumes:
+        - container: /var/lib/postgresql/data
+          description:
+            en_us: "PostgreSQL persistent data storage directory"
+
+volumes:
+  inframanager_postgres_data:
+    driver: local
+  inframanager_data:
+    driver: local
+
+networks:
+  inframanager_net:
+    driver: bridge

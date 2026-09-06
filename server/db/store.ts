@@ -951,6 +951,110 @@ export class DataStore {
     }
   }
 
+  public async syncDiscoveredCasaOS(connectionId: string, metadata?: { version?: string | null; telemetry?: NormalizedTelemetry | null }): Promise<CasaOSServer | null> {
+    const conn = this.connections.get(connectionId);
+    if (!conn) return null;
+
+    // Idempotent lookup: find existing server by connectionId or use stable deterministic ID
+    const existingServer = Array.from(this.casaosServers.values()).find(s => s.connectionId === connectionId);
+    const serverId = existingServer ? existingServer.id : `srv-casaos-${connectionId}`;
+
+    const hostOrIp = conn.host;
+    const hostname = conn.name || hostOrIp;
+    const ipAddress = hostOrIp;
+    const version = metadata?.version || existingServer?.version || 'CasaOS Edge';
+
+    const telemetry = metadata?.telemetry;
+    const cpuCores = telemetry?.cpu.coresTotal ?? existingServer?.cpuCores ?? 1;
+    const cpuUsagePct = telemetry?.cpu.utilizationPct ?? existingServer?.cpuUsagePct ?? 0;
+    const memoryBytesTotal = telemetry?.memory.totalBytes ?? existingServer?.memoryBytesTotal ?? 0;
+    const memoryBytesUsed = telemetry?.memory.usedBytes ?? existingServer?.memoryBytesUsed ?? 0;
+    const memoryUsagePct = telemetry?.memory.utilizationPct ?? existingServer?.memoryUsagePct ?? 0;
+    const storageBytesTotal = telemetry?.storage.totalBytes ?? existingServer?.storageBytesTotal ?? 0;
+    const storageBytesUsed = telemetry?.storage.usedBytes ?? existingServer?.storageBytesUsed ?? 0;
+    const storageUsagePct = telemetry?.storage.utilizationPct ?? existingServer?.storageUsagePct ?? 0;
+    const uptimeSeconds = telemetry?.uptimeSeconds ?? existingServer?.uptimeSeconds ?? 0;
+
+    const serverObj: CasaOSServer = {
+      id: serverId,
+      connectionId,
+      hostname,
+      ipAddress,
+      version,
+      uptimeSeconds,
+      cpuModel: existingServer?.cpuModel || undefined,
+      cpuCores,
+      cpuUsagePct,
+      memoryBytesTotal,
+      memoryBytesUsed,
+      memoryUsagePct,
+      storageBytesTotal,
+      storageBytesUsed,
+      storageUsagePct,
+      diskCount: existingServer?.diskCount ?? 0,
+      runningAppsCount: existingServer?.runningAppsCount ?? 0,
+      totalAppsCount: existingServer?.totalAppsCount ?? 0,
+      dockerVersion: existingServer?.dockerVersion || undefined,
+      disks: existingServer?.disks || []
+    };
+
+    this.casaosServers.set(serverObj.id, serverObj);
+
+    if (this.isDbConnected) {
+      try {
+        await prisma.casaOSServer.upsert({
+          where: { connectionId },
+          update: {
+            hostname: serverObj.hostname,
+            ipAddress: serverObj.ipAddress,
+            version: serverObj.version,
+            uptimeSeconds: BigInt(Math.floor(serverObj.uptimeSeconds || 0)),
+            cpuModel: serverObj.cpuModel || null,
+            cpuCores: serverObj.cpuCores,
+            cpuUsagePct: serverObj.cpuUsagePct,
+            memoryBytesTotal: BigInt(Math.floor(serverObj.memoryBytesTotal || 0)),
+            memoryBytesUsed: BigInt(Math.floor(serverObj.memoryBytesUsed || 0)),
+            memoryUsagePct: serverObj.memoryUsagePct,
+            storageBytesTotal: BigInt(Math.floor(serverObj.storageBytesTotal || 0)),
+            storageBytesUsed: BigInt(Math.floor(serverObj.storageBytesUsed || 0)),
+            storageUsagePct: serverObj.storageUsagePct,
+            diskCount: serverObj.diskCount,
+            runningAppsCount: serverObj.runningAppsCount,
+            totalAppsCount: serverObj.totalAppsCount,
+            dockerVersion: serverObj.dockerVersion || null,
+            disks: (serverObj.disks as any) || []
+          },
+          create: {
+            id: serverObj.id,
+            connectionId,
+            hostname: serverObj.hostname,
+            ipAddress: serverObj.ipAddress,
+            version: serverObj.version,
+            uptimeSeconds: BigInt(Math.floor(serverObj.uptimeSeconds || 0)),
+            cpuModel: serverObj.cpuModel || null,
+            cpuCores: serverObj.cpuCores,
+            cpuUsagePct: serverObj.cpuUsagePct,
+            memoryBytesTotal: BigInt(Math.floor(serverObj.memoryBytesTotal || 0)),
+            memoryBytesUsed: BigInt(Math.floor(serverObj.memoryBytesUsed || 0)),
+            memoryUsagePct: serverObj.memoryUsagePct,
+            storageBytesTotal: BigInt(Math.floor(serverObj.storageBytesTotal || 0)),
+            storageBytesUsed: BigInt(Math.floor(serverObj.storageBytesUsed || 0)),
+            storageUsagePct: serverObj.storageUsagePct,
+            diskCount: serverObj.diskCount,
+            runningAppsCount: serverObj.runningAppsCount,
+            totalAppsCount: serverObj.totalAppsCount,
+            dockerVersion: serverObj.dockerVersion || null,
+            disks: (serverObj.disks as any) || []
+          }
+        });
+      } catch (err: any) {
+        console.error(`[DataStore] Failed to persist CasaOS server '${serverObj.hostname}':`, err?.message || err);
+      }
+    }
+
+    return serverObj;
+  }
+
   public async saveAlert(alert: Alert): Promise<void> {
     this.alerts.set(alert.id, alert);
     if (!this.isDbConnected) return;

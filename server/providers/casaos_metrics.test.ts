@@ -508,4 +508,27 @@ describe('CasaOS Native REST API Provider', () => {
     assert.strictEqual(provider.isConnected, false);
     assert.ok(provider.lastError?.includes('ECONNREFUSED'));
   });
+
+  // 15. getCachedVersion method returns cached version after testConnection
+  it('15. getCachedVersion returns cached version after successful testConnection with version check', async () => {
+    const provider = createMockProvider();
+
+    provider['fetchWithTimeout'] = async (url: string) => {
+      if (url.endsWith('/v1/users/login')) return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
+      if (url.endsWith('/ping')) return new Response('pong', { status: 200 });
+      if (url.endsWith('/v1/sys/utilization')) return new Response(JSON.stringify({ success: 200, data: {} }), { status: 200 });
+      if (url.endsWith('/v1/sys/version')) {
+        return new Response(JSON.stringify({
+          success: 200,
+          data: { current_version: '0.4.8' }
+        }), { status: 200 });
+      }
+      return new Response('Not found', { status: 404 });
+    };
+
+    assert.strictEqual(provider.getCachedVersion(), null);
+    const testRes = await provider.testConnection();
+    assert.strictEqual(testRes.success, true);
+    assert.strictEqual(provider.getCachedVersion(), '0.4.8');
+  });
 });

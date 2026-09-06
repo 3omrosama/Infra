@@ -119,6 +119,13 @@ class MonitoringPoller {
           } catch (discErr: any) {
             console.warn(`[MonitoringPoller] Discovery sync notice for ${conn.name}:`, discErr.message);
           }
+        } else if (conn.type === 'CASAOS') {
+          try {
+            const version = typeof (provider as any).getCachedVersion === 'function' ? (provider as any).getCachedVersion() : null;
+            await store.syncDiscoveredCasaOS(conn.id, { version, telemetry });
+          } catch (syncErr: any) {
+            console.warn(`[MonitoringPoller] CasaOS sync notice for ${conn.name}:`, syncErr.message);
+          }
         }
 
         // Evaluate Alert Rules

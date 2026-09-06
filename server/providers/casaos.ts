@@ -477,4 +477,8 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
   async getEvents(): Promise<SystemEvent[]> {
     return [];
   }
+
+  public getCachedVersion(): string | null {
+    return this.cachedVersion;
+  }
 }

@@ -92,6 +92,13 @@ const createConnectionHandler = async (req: AuthenticatedRequest, res: Response)
       } catch (discErr: any) {
         console.error(`[InfrastructureRoutes] Initial discovery error on '${name}':`, discErr?.message || discErr);
       }
+    } else if (type === 'CASAOS') {
+      try {
+        const version = typeof (provider as any).getCachedVersion === 'function' ? (provider as any).getCachedVersion() : null;
+        await store.syncDiscoveredCasaOS(newConn.id, { version });
+      } catch (discErr: any) {
+        console.error(`[InfrastructureRoutes] Initial CasaOS server sync error on '${name}':`, discErr?.message || discErr);
+      }
     }
   } else {
     newConn.status = 'DEGRADED';
@@ -135,6 +142,23 @@ const testConnectionHandler = async (req: AuthenticatedRequest, res: Response) =
     conn.status = 'ONLINE';
     conn.lastSeen = new Date().toISOString();
     conn.errorDetails = undefined;
+
+    if (conn.type === 'CASAOS') {
+      try {
+        const version = typeof (provider as any).getCachedVersion === 'function' ? (provider as any).getCachedVersion() : null;
+        await store.syncDiscoveredCasaOS(conn.id, { version });
+      } catch (syncErr: any) {
+        console.error(`[InfrastructureRoutes] CasaOS server sync error on test '${conn.name}':`, syncErr?.message || syncErr);
+      }
+    } else if (conn.type === 'ESXI') {
+      try {
+        const hosts = await (provider as any).getHosts();
+        const vms = await (provider as any).getVirtualMachines();
+        await store.syncDiscoveredESXi(conn.id, hosts, vms);
+      } catch (discErr: any) {
+        console.error(`[InfrastructureRoutes] ESXi discovery error on test '${conn.name}':`, discErr?.message || discErr);
+      }
+    }
   } else {
     conn.status = 'DEGRADED';
     conn.errorDetails = result.message;

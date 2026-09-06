@@ -200,6 +200,59 @@ export class ESXiSoapDaemon {
     </RetrievePropertiesExResponse>
   </soapenv:Body>
 </soapenv:Envelope>`;
+            } else if (body.includes('Task') && (body.includes('<type>Task</type>') || body.includes('<obj type="Task">'))) {
+              if (body.includes('haTask-fail-001')) {
+                responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <RetrievePropertiesResponse xmlns="urn:vim25">
+      <returnval>
+        <obj type="Task">haTask-fail-001</obj>
+        <propSet>
+          <name>info.state</name>
+          <val>error</val>
+        </propSet>
+        <propSet>
+          <name>info.error</name>
+          <val>
+            <localizedMessage>The virtual machine operation failed due to invalid internal hypervisor state.</localizedMessage>
+          </val>
+        </propSet>
+      </returnval>
+    </RetrievePropertiesResponse>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+              } else if (body.includes('haTask-timeout-001')) {
+                responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <RetrievePropertiesResponse xmlns="urn:vim25">
+      <returnval>
+        <obj type="Task">haTask-timeout-001</obj>
+        <propSet>
+          <name>info.state</name>
+          <val>running</val>
+        </propSet>
+      </returnval>
+    </RetrievePropertiesResponse>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+              } else {
+                responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <RetrievePropertiesResponse xmlns="urn:vim25">
+      <returnval>
+        <obj type="Task">haTask-001</obj>
+        <propSet>
+          <name>info.state</name>
+          <val>success</val>
+        </propSet>
+      </returnval>
+    </RetrievePropertiesResponse>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+              }
             } else {
               responseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
@@ -318,6 +371,72 @@ export class ESXiSoapDaemon {
     <LogoutResponse xmlns="urn:vim25"/>
   </soapenv:Body>
 </soapenv:Envelope>`;
+          } else if (
+            body.includes('PowerOnVM_Task') ||
+            body.includes('PowerOffVM_Task') ||
+            body.includes('ResetVM_Task') ||
+            body.includes('SuspendVM_Task')
+          ) {
+            // Check for simulated faults
+            if (body.includes('invalid-state') || body.includes('vm-fault-invalid-state')) {
+              responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <soapenv:Fault>
+      <faultcode>ServerFaultCode</faultcode>
+      <faultstring>The attempted operation cannot be performed in the current state (Powered off)</faultstring>
+      <detail>
+        <InvalidPowerStateFault xmlns="urn:vim25"/>
+      </detail>
+    </soapenv:Fault>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+            } else if (body.includes('no-permission') || body.includes('vm-fault-no-permission')) {
+              responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <soapenv:Fault>
+      <faultcode>ServerFaultCode</faultcode>
+      <faultstring>Permission to perform this operation was denied</faultstring>
+      <detail>
+        <NoPermissionFault xmlns="urn:vim25">
+          <privilegeId>VirtualMachine.Interact.PowerOff</privilegeId>
+        </NoPermissionFault>
+      </detail>
+    </soapenv:Fault>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+            } else {
+              let taskMoRef = 'haTask-001';
+              let responseTagName = 'PowerOnVM_TaskResponse';
+
+              if (body.includes('vm-task-fail')) {
+                taskMoRef = 'haTask-fail-001';
+              } else if (body.includes('vm-task-timeout')) {
+                taskMoRef = 'haTask-timeout-001';
+              } else if (body.includes('PowerOffVM_Task')) {
+                taskMoRef = 'haTask-powerOff-001';
+                responseTagName = 'PowerOffVM_TaskResponse';
+              } else if (body.includes('ResetVM_Task')) {
+                taskMoRef = 'haTask-reset-001';
+                responseTagName = 'ResetVM_TaskResponse';
+              } else if (body.includes('SuspendVM_Task')) {
+                taskMoRef = 'haTask-suspend-001';
+                responseTagName = 'SuspendVM_TaskResponse';
+              } else {
+                taskMoRef = 'haTask-powerOn-001';
+                responseTagName = 'PowerOnVM_TaskResponse';
+              }
+
+              responseXml = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">
+  <soapenv:Body>
+    <${responseTagName} xmlns="urn:vim25">
+      <returnval type="Task">${taskMoRef}</returnval>
+    </${responseTagName}>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+            }
           } else {
             responseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:vim25="urn:vim25">

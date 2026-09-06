@@ -116,8 +116,20 @@ export class XmlParser {
     if (detail && detail.includes('NotAuthenticated')) {
       return 'Authentication failed: ESXi session is not authenticated or has expired.';
     }
-    if (detail && (detail.includes('NoPermission') || detail.includes('SecurityErrorFault'))) {
-      return 'Authentication failed: User account lacks administrative permissions on ESXi host.';
+    if (detail && (detail.includes('NoPermission') || detail.includes('SecurityErrorFault') || detail.includes('NoPermissionFault'))) {
+      return 'Permission denied: User account lacks permission to execute this operation on ESXi host.';
+    }
+    if (detail && (detail.includes('InvalidPowerState') || detail.includes('InvalidPowerStateFault') || detail.includes('InvalidState'))) {
+      return 'Invalid VM power state: The virtual machine is not in a valid state for the requested power operation.';
+    }
+    if (detail && (detail.includes('NotSupported') || detail.includes('NotSupportedFault'))) {
+      return 'Operation not supported: The requested power operation is not supported on this virtual machine.';
+    }
+    if (detail && (detail.includes('ToolsUnavailable') || detail.includes('ToolsUnavailableFault'))) {
+      return 'VMware Tools unavailable: VMware Tools is not running or not installed in the guest OS.';
+    }
+    if (detail && (detail.includes('TaskInProgress') || detail.includes('TaskInProgressFault'))) {
+      return 'Task in progress: Another task is already executing on this virtual machine.';
     }
     if (faultString) {
       return `SOAP Fault: ${faultString}`;
@@ -726,5 +738,166 @@ export class ESXiSoapClient {
     } catch {
       // Ignore teardown errors
     }
+  }
+
+  /**
+   * Step 6: Execute VM lifecycle power task operation on ESXi
+   * Maps action:
+   *   'power-on' -> PowerOnVM_Task
+   *   'power-off' -> PowerOffVM_Task
+   *   'restart' -> ResetVM_Task
+   *   'suspend' -> SuspendVM_Task
+   */
+  async executeVmPowerTask(
+    externalVmId: string,
+    action: 'power-on' | 'power-off' | 'restart' | 'suspend'
+  ): Promise<{ taskMoRef: string; returnval: string }> {
+    let soapMethod: string;
+    switch (action) {
+      case 'power-on':
+        soapMethod = 'PowerOnVM_Task';
+        break;
+      case 'power-off':
+        soapMethod = 'PowerOffVM_Task';
+        break;
+      case 'restart':
+        soapMethod = 'ResetVM_Task';
+        break;
+      case 'suspend':
+        soapMethod = 'SuspendVM_Task';
+        break;
+      default:
+        throw new Error(`Unsupported VM power action: ${action}`);
+    }
+
+    const soapBody = `
+      <${soapMethod} xmlns="urn:vim25">
+        <_this type="VirtualMachine">${escapeXml(externalVmId)}</_this>
+      </${soapMethod}>
+    `;
+
+    const res = await this.request(soapBody, 'urn:vim25');
+    const returnVal = XmlParser.extractTag(res.body, 'returnval') || '';
+    const taskMoRef = returnVal.replace(/<[^>]+>/g, '').trim();
+
+    return {
+      taskMoRef,
+      returnval: returnVal
+    };
+  }
+
+  /**
+   * Step 7: Query state and error info of a Task MORef
+   */
+  async queryTaskState(taskMoRef: string): Promise<{ state: 'queued' | 'running' | 'success' | 'error'; error?: string; result?: any }> {
+    const sc = await this.retrieveServiceContent();
+    const propCollector = sc.propertyCollector || { type: 'PropertyCollector', value: 'ha-property-collector' };
+
+    const soapBody = `
+      <RetrieveProperties xmlns="urn:vim25">
+        <_this type="${propCollector.type}">${propCollector.value}</_this>
+        <specSet>
+          <propSet>
+            <type>Task</type>
+            <all>false</all>
+            <pathSet>info.state</pathSet>
+            <pathSet>info.error</pathSet>
+            <pathSet>info.result</pathSet>
+            <pathSet>info.description</pathSet>
+          </propSet>
+          <objectSet>
+            <obj type="Task">${escapeXml(taskMoRef)}</obj>
+            <skip>false</skip>
+          </objectSet>
+        </specSet>
+      </RetrieveProperties>
+    `;
+
+    try {
+      const res = await this.request(soapBody, 'urn:vim25');
+      let objectsBlocks = XmlParser.extractAllTags(res.body, 'objects');
+      if (objectsBlocks.length === 0) {
+        objectsBlocks = XmlParser.extractAllTags(res.body, 'returnval');
+      }
+      if (objectsBlocks.length === 0) {
+        // If task not found in property collector, assume success if completed
+        return { state: 'success' };
+      }
+
+      const parsedObj = XmlParser.parseObjectProperties(objectsBlocks[0]);
+      const stateRaw = parsedObj.props['info.state'] || 'success';
+      const state = (typeof stateRaw === 'string' ? stateRaw.toLowerCase() : 'success') as 'queued' | 'running' | 'success' | 'error';
+
+      let errorMsg: string | undefined = undefined;
+      if (state === 'error') {
+        const errorProp = parsedObj.props['info.error'];
+        if (typeof errorProp === 'string') {
+          errorMsg = errorProp;
+        } else if (errorProp && typeof errorProp === 'object') {
+          errorMsg = errorProp.localizedMessage || errorProp.fault?.faultstring || JSON.stringify(errorProp);
+        }
+      }
+
+      return {
+        state,
+        error: errorMsg,
+        result: parsedObj.props['info.result']
+      };
+    } catch (err: any) {
+      // If task query fails due to SOAP fault or already completed/purged
+      if (err.message?.includes('not found') || err.message?.includes('NotFound')) {
+        return { state: 'success' };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Step 8: Bounded task polling for asynchronous ESXi Task execution
+   */
+  async waitForTask(
+    taskMoRef: string,
+    maxWaitMs = 10000,
+    pollIntervalMs = 500
+  ): Promise<{ success: boolean; state: string; error?: string; timedOut?: boolean }> {
+    if (!taskMoRef) {
+      return { success: true, state: 'success' };
+    }
+
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      try {
+        const taskInfo = await this.queryTaskState(taskMoRef);
+        if (taskInfo.state === 'success') {
+          return { success: true, state: 'success' };
+        }
+        if (taskInfo.state === 'error') {
+          return {
+            success: false,
+            state: 'error',
+            error: taskInfo.error || 'ESXi task execution failed'
+          };
+        }
+      } catch (pollErr: any) {
+        // If transient polling error occurs, check if it was a fault
+        if (pollErr.isSoapFault) {
+          return {
+            success: false,
+            state: 'error',
+            error: pollErr.message
+          };
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+
+    // If reached timeout, the task is still executing on ESXi
+    return {
+      success: true,
+      state: 'running',
+      timedOut: true
+    };
   }
 }

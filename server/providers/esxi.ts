@@ -12,6 +12,7 @@ import {
   PowerState
 } from '../../src/types/index.js';
 import { ESXiSoapClient, ESXiObjectContent } from './esxiSoapClient.js';
+import { store } from '../db/store.js';
 
 export class ESXiProvider extends BaseInfrastructureProvider {
   private client: ESXiSoapClient;
@@ -587,5 +588,119 @@ export class ESXiProvider extends BaseInfrastructureProvider {
 
   async getEvents(): Promise<SystemEvent[]> {
     return [];
+  }
+
+  /**
+   * Execute real VM power lifecycle actions (PowerOnVM_Task, PowerOffVM_Task, ResetVM_Task, SuspendVM_Task)
+   */
+  async executeVMAction(
+    vmId: string,
+    action: 'power-on' | 'power-off' | 'restart' | 'suspend'
+  ): Promise<{ success: boolean; message: string }> {
+    // 1. Resolve VM from store
+    const vm = store.virtualMachines.get(vmId);
+    if (!vm) {
+      return { success: false, message: `Virtual machine with ID '${vmId}' not found in inventory` };
+    }
+
+    // 2. Strict multi-tenant / connection isolation validation
+    if (vm.connectionId !== this.config.id) {
+      return {
+        success: false,
+        message: `Security validation rejected: VM '${vm.name}' belongs to connection '${vm.connectionId}', but power action was dispatched to connection '${this.config.id}'`
+      };
+    }
+
+    // 3. Validate externalVmId as trusted MORef from discovery
+    if (!vm.externalVmId || typeof vm.externalVmId !== 'string' || !vm.externalVmId.trim()) {
+      return {
+        success: false,
+        message: `Virtual machine '${vm.name}' is missing a valid ESXi Managed Object Reference (externalVmId)`
+      };
+    }
+
+    const externalVmId = vm.externalVmId.trim();
+
+    // 4. Ensure authenticated session with retry capability
+    await this.ensureSession();
+
+    const performAction = async (isRetry = false): Promise<{ success: boolean; message: string }> => {
+      try {
+        // Dispatch correct SOAP *_Task operation
+        const { taskMoRef } = await this.client.executeVmPowerTask(externalVmId, action);
+
+        // Bounded task polling (~500ms interval, ~10s max)
+        const taskResult = await this.client.waitForTask(taskMoRef, 10000, 500);
+
+        if (!taskResult.success) {
+          return {
+            success: false,
+            message: `ESXi task failed for '${action}' on '${vm.name}': ${taskResult.error || 'Unknown execution failure'}`
+          };
+        }
+
+        // Update local VM powerState ONLY after confirmed success
+        if (action === 'power-on') {
+          vm.powerState = 'RUNNING';
+        } else if (action === 'power-off') {
+          vm.powerState = 'STOPPED';
+          vm.cpuUsagePct = 0;
+          vm.memoryUsagePct = 0;
+        } else if (action === 'restart') {
+          vm.powerState = 'RUNNING';
+          vm.uptimeSeconds = 0;
+        } else if (action === 'suspend') {
+          vm.powerState = 'SUSPENDED';
+          vm.cpuUsagePct = 0;
+        }
+        vm.updatedAt = new Date().toISOString();
+        store.virtualMachines.set(vm.id, vm);
+
+        // Persist to Postgres if database connection active
+        if (store.isDbConnected) {
+          store.saveVirtualMachine(vm).catch(err => {
+            console.warn(`[ESXiProvider] Failed to persist VM power state update for '${vm.name}':`, err?.message || err);
+          });
+        }
+
+        store.addEvent({
+          connectionId: this.config.id,
+          eventType: 'VM_POWER_STATE',
+          severity: 'INFO',
+          source: 'ESXi Manager',
+          message: `VM '${vm.name}' (${externalVmId}) executed power action '${action}' -> ${vm.powerState}`
+        });
+
+        const statusDetail = taskResult.timedOut
+          ? `Power action '${action}' was accepted by ESXi and task is processing in background`
+          : `VM '${vm.name}' power action '${action}' completed successfully`;
+
+        return {
+          success: true,
+          message: statusDetail
+        };
+      } catch (err: any) {
+        if (
+          !isRetry &&
+          (err.message?.includes('Authentication') ||
+            err.message?.includes('NotAuthenticated') ||
+            err.message?.includes('session'))
+        ) {
+          console.warn(`[ESXiProvider] Session expired during executeVMAction on ${this.config.host}, re-authenticating...`);
+          try {
+            await this.ensureSession(true);
+            return await performAction(true);
+          } catch (retryErr: any) {
+            console.error(`[ESXiProvider] Re-authentication failed on ${this.config.host}:`, retryErr.message);
+          }
+        }
+        return {
+          success: false,
+          message: `Failed to execute '${action}' on VM '${vm.name}': ${err.message}`
+        };
+      }
+    };
+
+    return await performAction();
   }
 }

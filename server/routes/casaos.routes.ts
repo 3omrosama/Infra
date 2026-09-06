@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { store } from '../db/store.js';
+import { prisma } from '../db/prisma.js';
 import { authenticateToken, requireRole, AuthenticatedRequest } from '../auth.js';
 import { providerRegistry } from '../providers/registry.js';
 import { logAuditAction } from '../monitoring/audit.js';
@@ -88,6 +89,39 @@ router.post('/:id/apps/:appId/action', authenticateToken, requireRole('ADMIN', '
   });
 
   if (result.success) {
+    // Immediately update in-memory state for instant UI reflection
+    const nextStatus = action === 'start' ? 'running' : action === 'stop' ? 'stopped' : 'restarting';
+    app.status = nextStatus;
+    store.casaosApps.set(app.id, app);
+
+    // Update corresponding container if present in docker containers cache
+    const container = store.dockerContainers.get(app.id);
+    if (container) {
+      container.status = nextStatus;
+      container.state = nextStatus === 'running' ? 'running' : nextStatus === 'restarting' ? 'restarting' : 'exited';
+      store.dockerContainers.set(container.id, container);
+    }
+
+    // Update server running apps count in store
+    const server = Array.from(store.casaosServers.values()).find(s => s.connectionId === id);
+    if (server) {
+      const connApps = Array.from(store.casaosApps.values()).filter(a => a.connectionId === id);
+      server.runningAppsCount = connApps.filter(a => a.status === 'running').length;
+      server.totalAppsCount = connApps.length;
+      store.casaosServers.set(server.id, server);
+    }
+
+    // Asynchronously update Prisma database if connected
+    if (store.isDbConnected) {
+      prisma.container.updateMany({
+        where: { id: app.id, connectionId: id },
+        data: {
+          status: nextStatus,
+          powerState: action === 'stop' ? 'STOPPED' : 'RUNNING'
+        }
+      }).catch(e => console.error('[CasaOSRoute] DB container update error:', e));
+    }
+
     res.json({ success: true, message: result.message, app: store.casaosApps.get(appId) });
   } else {
     res.status(500).json({ error: result.message });

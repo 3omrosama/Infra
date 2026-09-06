@@ -38,13 +38,59 @@ import {
 } from './types/index';
 import { api } from './lib/api';
 
+const VALID_TABS: NavTab[] = [
+  'dashboard',
+  'infrastructure',
+  'esxi',
+  'vms',
+  'casaos',
+  'docker',
+  'servers',
+  'storage',
+  'network',
+  'monitoring',
+  'alerts',
+  'logs',
+  'tasks',
+  'users',
+  'settings'
+];
+
+const pathToTab = (pathname: string): NavTab => {
+  const clean = pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+  if (!clean || clean === 'dashboard') return 'dashboard';
+  return VALID_TABS.includes(clean as NavTab) ? (clean as NavTab) : 'dashboard';
+};
+
+const tabToPath = (tab: NavTab): string => {
+  return tab === 'dashboard' ? '/' : `/${tab}`;
+};
+
 const AppContent: React.FC = () => {
   const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const { isConnected: isSocketConnected, lastMetric, alerts: socketAlerts } = useSocket();
   const { showToast } = useNotifications();
 
-  // Navigation State
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  // Navigation State with URL Persistence & PopState Support
+  const [activeTab, setActiveTabState] = useState<NavTab>(() => pathToTab(window.location.pathname));
+
+  const setActiveTab = useCallback((tab: NavTab) => {
+    setActiveTabState(tab);
+    const targetPath = tabToPath(tab);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
+    }
+  }, []);
+
+  // Listen to browser Back/Forward (popstate)
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveTabState(pathToTab(window.location.pathname));
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
   const [isAddConnectionOpen, setIsAddConnectionOpen] = useState(false);

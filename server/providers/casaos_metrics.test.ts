@@ -126,9 +126,9 @@ describe('CasaOS Native REST API Provider', () => {
         return new Response(JSON.stringify(mockLoginSuccess), { status: 200 });
       }
       if (url.endsWith('/v1/sys/utilization')) {
-        // Verify Authorization header
+        // Verify Authorization header sends raw access_token (not Bearer)
         const auth = (options.headers as any)?.Authorization;
-        assert.ok(auth?.includes('Bearer jwt-mock-token-abc-123'));
+        assert.strictEqual(auth, 'jwt-mock-token-abc-123');
         return new Response(JSON.stringify(mockUtilization), { status: 200 });
       }
       if (url.endsWith('/v1/sys/disk')) {

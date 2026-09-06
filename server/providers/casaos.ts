@@ -143,7 +143,7 @@ export class CasaOSProvider extends BaseInfrastructureProvider {
 
     const headers: Record<string, string> = {
       'Accept': 'application/json',
-      'Authorization': `Bearer ${token}`,
+      'Authorization': token,
       ...((options.headers as Record<string, string>) || {})
     };
 

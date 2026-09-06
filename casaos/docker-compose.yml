@@ -1,10 +1,8 @@
-version: '3.8'
-
 name: inframanager
 
 services:
   inframanager:
-    image: ghcr.io/3omrosama/infra:latest
+    image: ghcr.io/3omrosama/infra:1.0.0
     container_name: inframanager
     restart: unless-stopped
     ports:
@@ -21,8 +19,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - inframanager_data:/app/data
     networks:
       - inframanager_net
 
@@ -35,7 +31,7 @@ services:
       - POSTGRES_PASSWORD=noc_secure_pass
       - POSTGRES_DB=noc_infrastructure
     volumes:
-      - inframanager_postgres_data:/var/lib/postgresql/data
+      - /DATA/AppData/$AppID/postgres:/var/lib/postgresql/data
     networks:
       - inframanager_net
     healthcheck:
@@ -43,12 +39,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-volumes:
-  inframanager_postgres_data:
-    driver: local
-  inframanager_data:
-    driver: local
 
 networks:
   inframanager_net:
@@ -74,7 +64,3 @@ x-casaos:
   port_map: "3000"
   scheme: http
   version: "1.0.0"
-  website: https://github.com/3omrosama/Infra
-  repo: https://github.com/3omrosama/Infra
-  support: https://github.com/3omrosama/Infra/issues
-  docs: https://github.com/3omrosama/Infra#readme

@@ -106,15 +106,17 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
         <button
           id="btn-refresh-vms"
           disabled={isRefreshing}
+          aria-disabled={isRefreshing}
+          aria-busy={isRefreshing}
           onClick={handleRefreshClick}
-          className={`flex items-center gap-1.5 px-3 py-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all self-start sm:self-auto select-none ${
+          className={`flex items-center justify-center gap-1.5 min-w-[124px] px-3 py-2 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-semibold transition-all self-start sm:self-auto select-none ${
             isRefreshing
               ? 'opacity-75 cursor-not-allowed text-cyan-300 border-cyan-500/30'
               : 'hover:bg-slate-800 hover:text-white active:scale-95'
           }`}
           title="Refresh virtual machine fleet"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 flex-shrink-0 transition-transform ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
           <span>{isRefreshing ? 'Refreshing...' : 'Refresh Fleet'}</span>
         </button>
       </div>
@@ -323,24 +325,22 @@ export const VirtualMachinesView: React.FC<VirtualMachinesViewProps> = ({
       />
 
       {/* Destructive Power Action Confirmation */}
-      {pendingAction && (
-        <ConfirmDialog
-          isOpen={Boolean(pendingAction)}
-          title={`Confirm '${pendingAction.action.toUpperCase()}' on ${pendingAction.vm.name}`}
-          message={`Are you sure you want to execute '${pendingAction.action}' on virtual machine '${pendingAction.vm.name}'? This action will be logged in the immutable security audit trail.`}
-          confirmLabel={`Execute ${pendingAction.action}`}
-          loadingLabel={`Executing ${pendingAction.action}...`}
-          isLoading={isExecutingAction}
-          isDestructive={pendingAction.action === 'power-off'}
-          requireReason={true}
-          onConfirm={handleExecuteConfirmedAction}
-          onCancel={() => {
-            if (!isExecutingAction) {
-              setPendingAction(null);
-            }
-          }}
-        />
-      )}
+      <ConfirmDialog
+        isOpen={Boolean(pendingAction)}
+        title={pendingAction ? `Confirm '${pendingAction.action.toUpperCase()}' on ${pendingAction.vm.name}` : ''}
+        message={pendingAction ? `Are you sure you want to execute '${pendingAction.action}' on virtual machine '${pendingAction.vm.name}'? This action will be logged in the immutable security audit trail.` : ''}
+        confirmLabel={pendingAction ? `Execute ${pendingAction.action}` : ''}
+        loadingLabel={pendingAction ? `Executing ${pendingAction.action}...` : ''}
+        isLoading={isExecutingAction}
+        isDestructive={pendingAction?.action === 'power-off'}
+        requireReason={true}
+        onConfirm={handleExecuteConfirmedAction}
+        onCancel={() => {
+          if (!isExecutingAction) {
+            setPendingAction(null);
+          }
+        }}
+      />
     </div>
   );
 };

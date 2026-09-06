@@ -102,4 +102,84 @@ describe('ConfirmDialog & VM Lifecycle Action UI State Machine', () => {
     handleCancel();
     assert.strictEqual(closed, true, 'Dialog closes when cancelled after execution completes');
   });
+
+  it('5. Animation lifecycle: mounts immediately on open and delays unmount for exit transition', async () => {
+    let isMounted = false;
+    let isVisible = false;
+    let exitTimer: NodeJS.Timeout | null = null;
+
+    // Simulate opening
+    const onOpen = () => {
+      if (exitTimer) {
+        clearTimeout(exitTimer);
+        exitTimer = null;
+      }
+      isMounted = true;
+      isVisible = true; // triggered after rAF
+    };
+
+    // Simulate closing
+    const onClose = (exitDurationMs = 200) => {
+      isVisible = false; // Fade/scale out begins immediately
+      return new Promise<void>(resolve => {
+        exitTimer = setTimeout(() => {
+          isMounted = false; // Unmount after animation completes
+          exitTimer = null;
+          resolve();
+        }, exitDurationMs);
+      });
+    };
+
+    onOpen();
+    assert.strictEqual(isMounted, true, 'DOM is mounted immediately upon open');
+    assert.strictEqual(isVisible, true, 'Dialog transitions to visible');
+
+    const closePromise = onClose(50);
+    assert.strictEqual(isVisible, false, 'Fade/scale out transition initiates immediately on close');
+    assert.strictEqual(isMounted, true, 'DOM remains mounted while exit animation is playing');
+
+    await closePromise;
+    assert.strictEqual(isMounted, false, 'DOM is unmounted after exit animation finishes');
+  });
+
+  it('6. Handles rapid open/close/open toggles without leaving stale unmounted state', async () => {
+    let isMounted = false;
+    let isVisible = false;
+    let exitTimer: NodeJS.Timeout | null = null;
+
+    const setOpen = (open: boolean) => {
+      if (open) {
+        if (exitTimer) {
+          clearTimeout(exitTimer);
+          exitTimer = null;
+        }
+        isMounted = true;
+        isVisible = true;
+      } else {
+        isVisible = false;
+        exitTimer = setTimeout(() => {
+          isMounted = false;
+          exitTimer = null;
+        }, 100);
+      }
+    };
+
+    // Open
+    setOpen(true);
+    assert.strictEqual(isMounted, true);
+    assert.strictEqual(isVisible, true);
+
+    // Rapid close then immediate reopen before timer expires
+    setOpen(false);
+    assert.strictEqual(isVisible, false);
+    assert.strictEqual(isMounted, true);
+
+    setOpen(true);
+    assert.strictEqual(isMounted, true);
+    assert.strictEqual(isVisible, true);
+
+    // Wait 150ms to ensure cleared timer did NOT unmount the reopened dialog
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.strictEqual(isMounted, true, 'Dialog remains mounted and visible after aborted close timer');
+  });
 });

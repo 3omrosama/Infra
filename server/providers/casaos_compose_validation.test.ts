@@ -18,17 +18,21 @@ describe('CasaOS Deployment Definition Validation', () => {
   it('2. Main application service is named "inframanager" with immutable version tag', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
     assert.ok(content.includes('inframanager:'), 'Must declare inframanager service');
-    assert.ok(content.includes('image: ghcr.io/3omrosama/infra:1.0.0'), 'Must use immutable version image tag');
+    assert.ok(content.includes('image: ghcr.io/3omrosama/infra:sha-aedc905'), 'Must use immutable version image tag sha-aedc905');
     assert.ok(!content.includes('image: ghcr.io/3omrosama/infra:latest'), 'Must not use :latest tag');
     assert.ok(content.includes('container_name: inframanager'), 'Must set stable container_name: inframanager');
+    assert.ok(content.includes('"3000:3000"') || content.includes('3000:3000'), 'Must map port 3000:3000');
     assert.ok(!content.includes('services:\n  app:'), 'Must not name main service generically as "app"');
   });
 
-  it('3. PostgreSQL database service is named "postgres" with exact image', () => {
+  it('3. PostgreSQL database service is named "postgres" with exact image and no host port exposure', () => {
     const content = fs.readFileSync(casaosComposePath, 'utf8');
     assert.ok(content.includes('postgres:'), 'Must declare postgres service');
     assert.ok(content.includes('image: postgres:16-alpine'), 'Must use postgres:16-alpine');
     assert.ok(content.includes('container_name: postgres'), 'Must set stable container_name: postgres');
+    // Ensure postgres does not expose port 5432 to the host
+    assert.ok(!content.includes('5432:5432'), 'Postgres must not expose host port 5432');
+    assert.ok(!content.includes('"5432:5432"'), 'Postgres must not expose host port 5432');
   });
 
   it('4. x-casaos.main accurately points to "inframanager" and contains id', () => {

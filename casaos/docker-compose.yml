@@ -2,7 +2,7 @@ name: inframanager
 
 services:
   inframanager:
-    image: ghcr.io/3omrosama/infra:1.0.0
+    image: ghcr.io/3omrosama/infra:sha-aedc905
     container_name: inframanager
     restart: unless-stopped
     ports:
